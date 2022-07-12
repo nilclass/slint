@@ -22,6 +22,7 @@ backend-skia = ["i-slint-backend-skia"]
 
 rtti-gl = ["i-slint-backend-gl/rtti"]
 rtti-qt = ["i-slint-backend-qt/rtti"]
+rtti-skia = ["i-slint-backend-skia/rtti"]
 
 [dependencies]
 i-slint-core = { version = "=0.2.6", path = "../../../internal/core", default-features = false }

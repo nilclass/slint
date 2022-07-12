@@ -18,8 +18,9 @@ backend-qt = ["slint-interpreter/backend-qt"]
 backend-gl-all = ["slint-interpreter/backend-gl-all"]
 backend-gl-wayland = ["slint-interpreter/backend-gl-wayland"]
 backend-gl-x11 = ["slint-interpreter/backend-gl-x11"]
+backend-skia = ["slint-interpreter/backend-skia"]
 
-default = ["backend-qt", "backend-gl-all"]
+default = ["backend-qt", "backend-gl-all", "backend-skia"]
 
 [dependencies]
 i-slint-core = { version = "=0.2.6", path="../../internal/core" }
