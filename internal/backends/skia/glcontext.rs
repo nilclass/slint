@@ -12,8 +12,6 @@ enum OpenGLContextState {
     NotCurrent(glutin::WindowedContext<glutin::NotCurrent>),
     #[cfg(not(target_arch = "wasm32"))]
     Current(glutin::WindowedContext<glutin::PossiblyCurrent>),
-    #[cfg(target_arch = "wasm32")]
-    Current { window: Rc<winit::window::Window>, canvas: web_sys::HtmlCanvasElement },
 }
 
 pub struct OpenGLContext(RefCell<Option<OpenGLContextState>>);
@@ -25,15 +23,6 @@ impl OpenGLContext {
             OpenGLContextState::NotCurrent(context) => context.window(),
             #[cfg(not(target_arch = "wasm32"))]
             OpenGLContextState::Current(context) => context.window(),
-            #[cfg(target_arch = "wasm32")]
-            OpenGLContextState::Current { window, .. } => window.as_ref(),
-        })
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub fn html_canvas_element(&self) -> std::cell::Ref<web_sys::HtmlCanvasElement> {
-        std::cell::Ref::map(self.0.borrow(), |state| match state.as_ref().unwrap() {
-            OpenGLContextState::Current { canvas, .. } => canvas,
         })
     }
 
@@ -50,18 +39,13 @@ impl OpenGLContext {
     }
 
     pub fn make_not_current(&self) {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let mut ctx = self.0.borrow_mut();
-            *ctx = Some(match ctx.take().unwrap() {
-                state @ OpenGLContextState::NotCurrent(_) => state,
-                OpenGLContextState::Current(current_ctx_rc) => {
-                    OpenGLContextState::NotCurrent(unsafe {
-                        current_ctx_rc.make_not_current().unwrap()
-                    })
-                }
-            });
-        }
+        let mut ctx = self.0.borrow_mut();
+        *ctx = Some(match ctx.take().unwrap() {
+            state @ OpenGLContextState::NotCurrent(_) => state,
+            OpenGLContextState::Current(current_ctx_rc) => OpenGLContextState::NotCurrent(unsafe {
+                current_ctx_rc.make_not_current().unwrap()
+            }),
+        });
     }
 
     pub fn with_current_context<T>(&self, cb: impl FnOnce(&Self) -> T) -> T {
@@ -76,7 +60,6 @@ impl OpenGLContext {
     }
 
     pub fn swap_buffers(&self) {
-        #[cfg(not(target_arch = "wasm32"))]
         match &self.0.borrow().as_ref().unwrap() {
             OpenGLContextState::NotCurrent(_) => {}
             OpenGLContextState::Current(current_ctx) => {
@@ -86,7 +69,6 @@ impl OpenGLContext {
     }
 
     pub fn ensure_resized(&self) {
-        #[cfg(not(target_arch = "wasm32"))]
         match &self.0.borrow().as_ref().unwrap() {
             OpenGLContextState::NotCurrent(_) => {
                 i_slint_core::debug_log!("internal error: cannot call OpenGLContext::ensure_resized without context being current!")
@@ -177,11 +159,21 @@ impl OpenGLContext {
         Self(RefCell::new(Some(OpenGLContextState::Current(windowed_context))))
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn get_proc_address(&self, name: &str) -> *const std::ffi::c_void {
         match &self.0.borrow().as_ref().unwrap() {
             OpenGLContextState::NotCurrent(_) => std::ptr::null(),
             OpenGLContextState::Current(current_ctx) => current_ctx.get_proc_address(name),
         }
+    }
+
+    pub fn current_glutin_context(
+        &self,
+    ) -> std::cell::Ref<glutin::WindowedContext<glutin::PossiblyCurrent>> {
+        std::cell::Ref::map(self.0.borrow(), |state| match state.as_ref().unwrap() {
+            OpenGLContextState::NotCurrent(context) => {
+                panic!("internal error: current_glutin_context call without current context")
+            }
+            OpenGLContextState::Current(context) => context,
+        })
     }
 }

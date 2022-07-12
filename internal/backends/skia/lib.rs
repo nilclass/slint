@@ -11,6 +11,7 @@ use std::rc::Rc;
 
 use i_slint_core::graphics::{Image, IntSize};
 use i_slint_core::window::Window;
+use i_slint_core::Color;
 
 mod glwindow;
 use glwindow::*;
@@ -132,4 +133,8 @@ impl i_slint_core::backend::Backend for Backend {
             });
         }
     }
+}
+
+pub fn to_skia_color(col: &Color) -> skia_safe::Color {
+    skia_safe::Color::from_argb(col.alpha(), col.red(), col.green(), col.blue())
 }
