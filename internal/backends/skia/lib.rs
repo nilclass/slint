@@ -19,6 +19,7 @@ mod glcontext;
 use glcontext::*;
 pub(crate) mod event_loop;
 
+mod skiarenderer;
 mod stylemetrics;
 
 #[cfg(target_arch = "wasm32")]
@@ -133,8 +134,4 @@ impl i_slint_core::backend::Backend for Backend {
             });
         }
     }
-}
-
-pub fn to_skia_color(col: &Color) -> skia_safe::Color {
-    skia_safe::Color::from_argb(col.alpha(), col.red(), col.green(), col.blue())
 }

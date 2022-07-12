@@ -191,7 +191,7 @@ impl WinitWindow for GLWindow {
 
             let canvas = surface.canvas();
 
-            canvas.clear(crate::to_skia_color(&window.clear_color));
+            canvas.clear(crate::skiarenderer::to_skia_color(&window.clear_color));
 
             // For the BeforeRendering rendering notifier callback it's important that this happens *after* clearing
             // the back buffer, in order to allow the callback to provide its own rendering of the background.
@@ -205,40 +205,11 @@ impl WinitWindow for GLWindow {
                 );
             }
 
-            /*
-            {
-                let mut canvas = window.canvas.as_ref().unwrap().borrow_mut();
-                // We pass 1.0 as dpi / device pixel ratio as femtovg only uses this factor to scale
-                // text metrics. Since we do the entire translation from logical pixels to physical
-                // pixels on our end, we don't need femtovg to scale a second time.
-                canvas.set_size(size.width, size.height, 1.0);
-                canvas.clear_rect(
-                    0,
-                    0,
-                    size.width,
-                    size.height,
-                    crate::glrenderer::to_femtovg_color(&window.clear_color),
-                );
-                // For the BeforeRendering rendering notifier callback it's important that this happens *after* clearing
-                // the back buffer, in order to allow the callback to provide its own rendering of the background.
-                // femtovg's clear_rect() will merely schedule a clear call, so flush right away to make it immediate.
-                if self.has_rendering_notifier() {
-                    canvas.flush();
-                    canvas.set_size(size.width, size.height, 1.0);
-
-                    self.invoke_rendering_notifier(
-                        RenderingState::BeforeRendering,
-                        &window.opengl_context,
-                    );
-                }
-            }
-
-            let mut renderer = crate::glrenderer::GLItemRenderer::new(
-                window.canvas.as_ref().unwrap().clone(),
-                self.clone(),
+            let mut renderer = crate::skiarenderer::SkiaRenderer {
+                canvas,
+                graphics_window: self.clone(),
                 scale_factor,
-                size,
-            );
+            };
 
             for (component, origin) in components {
                 corelib::item_rendering::render_component_items(component, &mut renderer, *origin);
@@ -248,14 +219,8 @@ impl WinitWindow for GLWindow {
                 collector.measure_frame_rendered(&mut renderer);
             }
 
-            renderer.canvas.borrow_mut().flush();
-
-            // Delete any images and layer images (and their FBOs) before making the context not current anymore, to
-            // avoid GPU memory leaks.
-            renderer.graphics_window.texture_cache.borrow_mut().drain();
-
             drop(renderer);
-            */
+
             canvas.flush();
 
             self.invoke_rendering_notifier(RenderingState::AfterRendering, &window.opengl_context);
