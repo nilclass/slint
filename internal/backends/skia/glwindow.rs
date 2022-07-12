@@ -486,20 +486,21 @@ impl PlatformWindow for GLWindow {
         let (opengl_context, renderer) =
             crate::OpenGLContext::new_context_and_renderer(window_builder, &self.canvas_id);
         #[cfg(not(target_arch = "wasm32"))]
-        let (opengl_context, renderer) =
-            crate::OpenGLContext::new_context_and_renderer(window_builder);
+        let opengl_context = crate::OpenGLContext::new_context_and_renderer(window_builder);
 
+        /*
         let canvas = femtovg::Canvas::new_with_text_context(
             renderer,
             crate::fonts::FONT_CACHE.with(|cache| cache.borrow().text_context.clone()),
         )
         .unwrap();
+        */
 
         self.invoke_rendering_notifier(RenderingState::RenderingSetup, &opengl_context);
 
         opengl_context.make_not_current();
 
-        let canvas = Rc::new(RefCell::new(canvas));
+        //let canvas = Rc::new(RefCell::new(canvas));
 
         let platform_window = opengl_context.window();
         let runtime_window = self.self_weak.upgrade().unwrap();
@@ -619,12 +620,14 @@ impl PlatformWindow for GLWindow {
     ) -> Size {
         let font_request = font_request.merge(&self.default_font_properties());
 
-        crate::fonts::text_size(
+        /*        crate::fonts::text_size(
             &font_request,
             self.self_weak.upgrade().unwrap().scale_factor(),
             text,
             max_width,
         )
+        */
+        todo!()
     }
 
     fn text_input_byte_offset_for_position(
@@ -632,6 +635,7 @@ impl PlatformWindow for GLWindow {
         text_input: Pin<&i_slint_core::items::TextInput>,
         pos: Point,
     ) -> usize {
+        /*
         let scale_factor = self.self_weak.upgrade().unwrap().scale_factor();
         let pos = pos * scale_factor;
         let text = text_input.text();
@@ -696,6 +700,8 @@ impl PlatformWindow for GLWindow {
         } else {
             result
         }
+        */
+        todo!()
     }
 
     fn text_input_cursor_rect_for_byte_offset(
@@ -703,6 +709,7 @@ impl PlatformWindow for GLWindow {
         text_input: Pin<&corelib::items::TextInput>,
         byte_offset: usize,
     ) -> Rect {
+        /*
         let scale_factor = self.self_weak.upgrade().unwrap().scale_factor();
         let text = text_input.text();
 
@@ -754,24 +761,8 @@ impl PlatformWindow for GLWindow {
         );
 
         Rect::new(result / scale_factor, Size::new(1.0, font_size))
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn show_virtual_keyboard(&self, _it: corelib::items::InputType) {
-        let mut vkh = self.virtual_keyboard_helper.borrow_mut();
-        let h = vkh.get_or_insert_with(|| {
-            let canvas =
-                self.borrow_mapped_window().unwrap().opengl_context.html_canvas_element().clone();
-            super::wasm_input_helper::WasmInputHelper::new(self.self_weak.clone(), canvas)
-        });
-        h.show();
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn hide_virtual_keyboard(&self) {
-        if let Some(h) = &*self.virtual_keyboard_helper.borrow() {
-            h.hide()
-        }
+        */
+        todo!()
     }
 
     fn as_any(&self) -> &dyn std::any::Any {

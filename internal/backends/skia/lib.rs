@@ -18,8 +18,6 @@ mod glcontext;
 use glcontext::*;
 pub(crate) mod event_loop;
 
-mod fonts;
-
 mod stylemetrics;
 
 #[cfg(target_arch = "wasm32")]
@@ -89,14 +87,16 @@ impl i_slint_core::backend::Backend for Backend {
         &'static self,
         data: &'static [u8],
     ) -> Result<(), Box<dyn std::error::Error>> {
-        self::fonts::register_font_from_memory(data)
+        //self::fonts::register_font_from_memory(data)
+        todo!()
     }
 
     fn register_font_from_path(
         &'static self,
         path: &std::path::Path,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        self::fonts::register_font_from_path(path)
+        //        self::fonts::register_font_from_path(path)
+        todo!()
     }
 
     fn set_clipboard_text(&'static self, text: String) {
