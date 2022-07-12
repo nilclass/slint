@@ -176,15 +176,20 @@ impl WinitWindow for GLWindow {
                 None => return, // caller bug, doesn't make sense to call draw() when not mapped
             };
 
-            let size = window.opengl_context.window().inner_size();
-
             window.opengl_context.make_current();
             window.opengl_context.ensure_resized();
 
             let mut surface = window.skia_surface.borrow_mut();
-            let canvas = surface.canvas();
 
-            // ### CANVAS Size
+            let size = window.opengl_context.window().inner_size();
+            if size.width != surface.width() as u32 || size.height != surface.height() as u32 {
+                *surface = create_surface(
+                    &window.opengl_context,
+                    &mut window.skia_gr_context.borrow_mut(),
+                );
+            }
+
+            let canvas = surface.canvas();
 
             canvas.clear(crate::to_skia_color(&window.clear_color));
 
@@ -517,39 +522,9 @@ impl PlatformWindow for GLWindow {
         .unwrap();
         */
 
-        let gl = unsafe {
-            glow::Context::from_loader_function(|s| opengl_context.get_proc_address(s) as *const _)
-        };
-
         let mut gr_context = skia_safe::gpu::DirectContext::new_gl(None, None).unwrap();
 
-        let fb_info = {
-            let fboid = unsafe { gl.get_parameter_i32(glow::FRAMEBUFFER_BINDING) };
-
-            skia_safe::gpu::gl::FramebufferInfo {
-                fboid: fboid.try_into().unwrap(),
-                format: skia_safe::gpu::gl::Format::RGBA8.into(),
-            }
-        };
-        let ctx = opengl_context.current_glutin_context();
-        let pixel_format = ctx.get_pixel_format();
-        let size = opengl_context.window().inner_size();
-        let backend_render_target = skia_safe::gpu::BackendRenderTarget::new_gl(
-            (size.width.try_into().unwrap(), size.height.try_into().unwrap()),
-            pixel_format.multisampling.map(|s| s.try_into().unwrap()),
-            pixel_format.stencil_bits.try_into().unwrap(),
-            fb_info,
-        );
-        let surface = skia_safe::Surface::from_backend_render_target(
-            &mut gr_context,
-            &backend_render_target,
-            skia_safe::gpu::SurfaceOrigin::BottomLeft,
-            skia_safe::ColorType::RGBA8888,
-            None,
-            None,
-        )
-        .unwrap();
-        drop(ctx);
+        let surface = create_surface(&opengl_context, &mut gr_context);
 
         self.invoke_rendering_notifier(RenderingState::RenderingSetup, &opengl_context);
 
@@ -603,7 +578,7 @@ impl PlatformWindow for GLWindow {
 
         self.map_state.replace(GraphicsWindowBackendState::Mapped(MappedWindow {
             skia_surface: surface.into(),
-            skia_gr_context: gr_context,
+            skia_gr_context: gr_context.into(),
             opengl_context,
             clear_color: RgbaColor { red: 255_u8, green: 255, blue: 255, alpha: 255 }.into(),
             constraints: Default::default(),
@@ -884,6 +859,45 @@ impl PlatformWindow for GLWindow {
     }
 }
 
+fn create_surface(
+    opengl_context: &OpenGLContext,
+    gr_context: &mut skia_safe::gpu::DirectContext,
+) -> skia_safe::Surface {
+    let ctx = opengl_context.current_glutin_context();
+
+    let fb_info = {
+        let gl = unsafe {
+            glow::Context::from_loader_function(|s| opengl_context.get_proc_address(s) as *const _)
+        };
+        let fboid = unsafe { gl.get_parameter_i32(glow::FRAMEBUFFER_BINDING) };
+
+        skia_safe::gpu::gl::FramebufferInfo {
+            fboid: fboid.try_into().unwrap(),
+            format: skia_safe::gpu::gl::Format::RGBA8.into(),
+        }
+    };
+
+    let pixel_format = ctx.get_pixel_format();
+    let size = opengl_context.window().inner_size();
+    let backend_render_target = skia_safe::gpu::BackendRenderTarget::new_gl(
+        (size.width.try_into().unwrap(), size.height.try_into().unwrap()),
+        pixel_format.multisampling.map(|s| s.try_into().unwrap()),
+        pixel_format.stencil_bits.try_into().unwrap(),
+        fb_info,
+    );
+    let surface = skia_safe::Surface::from_backend_render_target(
+        gr_context,
+        &backend_render_target,
+        skia_safe::gpu::SurfaceOrigin::BottomLeft,
+        skia_safe::ColorType::RGBA8888,
+        None,
+        None,
+    )
+    .unwrap();
+    drop(ctx);
+    surface
+}
+
 impl Drop for GLWindow {
     fn drop(&mut self) {
         self.release_graphics_resources();
@@ -892,7 +906,7 @@ impl Drop for GLWindow {
 
 struct MappedWindow {
     skia_surface: RefCell<skia_safe::Surface>,
-    skia_gr_context: skia_safe::gpu::DirectContext,
+    skia_gr_context: RefCell<skia_safe::gpu::DirectContext>,
     opengl_context: crate::OpenGLContext,
     clear_color: Color,
     constraints: Cell<(corelib::layout::LayoutInfo, corelib::layout::LayoutInfo)>,
