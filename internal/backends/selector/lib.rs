@@ -38,6 +38,10 @@ cfg_if::cfg_if! {
                 if backend_config == "GL" {
                     return Box::new(i_slint_backend_gl::Backend);
                 }
+                #[cfg(feature = "i-slint-backend-skia")]
+                if backend_config == "Skia" {
+                    return Box::new(i_slint_backend_skia::Backend);
+                }
 
                 #[cfg(any(
                     feature = "i-slint-backend-qt",
@@ -76,6 +80,8 @@ pub fn use_modules() {
     i_slint_backend_qt::use_modules();
     #[cfg(feature = "i-slint-backend-gl")]
     i_slint_backend_gl::use_modules();
+    #[cfg(feature = "i-slint-backend-skia")]
+    i_slint_backend_skia::use_modules();
 }
 
 #[no_mangle]

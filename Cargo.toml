@@ -27,6 +27,7 @@ members = [
     'internal/backends/gl',
     'internal/backends/mcu',
     'internal/backends/qt',
+    'internal/backends/skia',
     'internal/backends/selector',
     'internal/backends/testing',
     'internal/common',

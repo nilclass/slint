@@ -19,7 +19,7 @@ path = "lib.rs"
 
 [features]
 
-default = ["std", "backend-gl-all", "backend-qt", "compat-0-2-0"]
+default = ["std", "backend-gl-all", "backend-qt", "backend-skia", "compat-0-2-0"]
 
 ## Mandatory feature:
 ## This feature is required to keep the compatibility with Slint 0.2.0
@@ -50,6 +50,8 @@ backend-gl-x11 = ["i-slint-backend-selector/backend-gl-x11", "std"]
 ## Wayland window system on Unix.
 backend-gl-wayland = ["i-slint-backend-selector/backend-gl-wayland", "std"]
 
+## The Skia backend feature uses winit for the windowing system integration and Skia for rendering.
+backend-skia = ["i-slint-backend-selector/i-slint-backend-skia", "std"]
 
 [dependencies]
 i-slint-core = { version = "=0.2.6", path="../../../internal/core", default-features = false }
