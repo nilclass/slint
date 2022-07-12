@@ -205,11 +205,8 @@ impl WinitWindow for GLWindow {
                 );
             }
 
-            let mut renderer = crate::skiarenderer::SkiaRenderer {
-                canvas,
-                graphics_window: self.clone(),
-                scale_factor,
-            };
+            let mut renderer =
+                crate::skiarenderer::SkiaRenderer::new(canvas, self.clone(), scale_factor);
 
             for (component, origin) in components {
                 corelib::item_rendering::render_component_items(component, &mut renderer, *origin);
