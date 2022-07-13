@@ -608,8 +608,13 @@ impl PlatformWindow for GLWindow {
     ) -> Size {
         let font_request = font_request.merge(&self.default_font_properties());
         let scale_factor = self.self_weak.upgrade().unwrap().scale_factor();
-        let layout =
-            crate::textlayout::create_layout(font_request, scale_factor, text, None, max_width);
+        let layout = crate::textlayout::create_layout(
+            font_request,
+            scale_factor,
+            text,
+            None,
+            max_width.map(|w| w * scale_factor),
+        );
 
         [layout.max_width() / scale_factor, layout.height() / scale_factor].into()
     }
