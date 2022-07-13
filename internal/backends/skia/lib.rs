@@ -99,7 +99,7 @@ impl i_slint_core::backend::Backend for Backend {
         path: &std::path::Path,
     ) -> Result<(), Box<dyn std::error::Error>> {
         //        self::fonts::register_font_from_path(path)
-        todo!()
+        Err("register_font_from_path not implemented".into())
     }
 
     fn set_clipboard_text(&'static self, text: String) {
