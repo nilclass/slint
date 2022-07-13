@@ -484,7 +484,11 @@ impl PlatformWindow for GLWindow {
         .unwrap();
         */
 
-        let mut gr_context = skia_safe::gpu::DirectContext::new_gl(None, None).unwrap();
+        let gl_interface = skia_safe::gpu::gl::Interface::new_load_with(|symbol| {
+            opengl_context.get_proc_address(symbol)
+        });
+
+        let mut gr_context = skia_safe::gpu::DirectContext::new_gl(gl_interface, None).unwrap();
 
         let surface = create_surface(&opengl_context, &mut gr_context);
 
