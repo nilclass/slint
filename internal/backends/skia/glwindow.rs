@@ -616,7 +616,7 @@ impl PlatformWindow for GLWindow {
             max_width.map(|w| w * scale_factor),
         );
 
-        [layout.max_width() / scale_factor, layout.height() / scale_factor].into()
+        [layout.max_intrinsic_width() / scale_factor, layout.height() / scale_factor].into()
     }
 
     fn text_input_byte_offset_for_position(
