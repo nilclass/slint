@@ -476,14 +476,6 @@ impl PlatformWindow for GLWindow {
         #[cfg(not(target_arch = "wasm32"))]
         let opengl_context = crate::OpenGLContext::new_context_and_renderer(window_builder);
 
-        /*
-        let canvas = femtovg::Canvas::new_with_text_context(
-            renderer,
-            crate::fonts::FONT_CACHE.with(|cache| cache.borrow().text_context.clone()),
-        )
-        .unwrap();
-        */
-
         let gl_interface = skia_safe::gpu::gl::Interface::new_load_with(|symbol| {
             opengl_context.get_proc_address(symbol)
         });
@@ -495,8 +487,6 @@ impl PlatformWindow for GLWindow {
         self.invoke_rendering_notifier(RenderingState::RenderingSetup, &opengl_context);
 
         opengl_context.make_not_current();
-
-        //let canvas = Rc::new(RefCell::new(canvas));
 
         let platform_window = opengl_context.window();
         let runtime_window = self.self_weak.upgrade().unwrap();
