@@ -21,6 +21,7 @@ pub(crate) mod event_loop;
 
 mod skiarenderer;
 mod stylemetrics;
+mod textlayout;
 
 #[cfg(target_arch = "wasm32")]
 pub fn create_gl_window_with_canvas_id(canvas_id: String) -> Rc<Window> {

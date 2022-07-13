@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use i_slint_core::graphics::euclid;
 use i_slint_core::item_rendering::ItemRenderer;
-use i_slint_core::items::{ItemRc, Opacity, RenderingResult};
+use i_slint_core::items::{ItemRc, Opacity, RenderingResult, TextWrap};
 use i_slint_core::{items, Brush, Color};
 
 use crate::glwindow::GLWindow;
@@ -128,7 +128,35 @@ impl<'a> ItemRenderer for SkiaRenderer<'a> {
         text: std::pin::Pin<&i_slint_core::items::Text>,
         _self_rc: &i_slint_core::items::ItemRc,
     ) {
-        //todo!()
+        let max_width = text.width() * self.scale_factor;
+        let max_height = text.height() * self.scale_factor;
+
+        if max_width <= 0. || max_height <= 0. {
+            return;
+        }
+
+        let string = text.text();
+        let string = string.as_str();
+        let font_request =
+            text.unresolved_font_request().merge(&self.graphics_window.default_font_properties());
+
+        let paint = match self.brush_to_paint(text.color()) {
+            Some(paint) => paint,
+            None => return,
+        };
+
+        let mut text_style = skia_safe::textlayout::TextStyle::new();
+        text_style.set_foreground_color(paint);
+
+        let layout = crate::textlayout::create_layout(
+            font_request,
+            self.scale_factor,
+            string,
+            Some(text_style),
+            if text.wrap() == TextWrap::word_wrap { Some(max_width) } else { None },
+        );
+
+        layout.paint(&mut self.canvas, skia_safe::Point::default());
     }
 
     fn draw_text_input(
