@@ -18,6 +18,7 @@ use corelib::api::{
 use corelib::component::ComponentRc;
 use corelib::graphics::rendering_metrics_collector::RenderingMetricsCollector;
 use corelib::input::KeyboardModifiers;
+use corelib::item_rendering::ItemCache;
 use corelib::items::{ItemRef, MouseCursor};
 use corelib::layout::Orientation;
 use corelib::window::{PlatformWindow, PopupWindow, PopupWindowLocation};
@@ -40,6 +41,8 @@ pub struct GLWindow {
     rendering_metrics_collector: Option<Rc<RenderingMetricsCollector>>,
 
     rendering_notifier: RefCell<Option<Box<dyn RenderingNotifier>>>,
+
+    image_cache: ItemCache<Option<skia_safe::Image>>,
 
     #[cfg(target_arch = "wasm32")]
     canvas_id: String,
@@ -69,6 +72,7 @@ impl GLWindow {
             currently_pressed_key_code: Default::default(),
             rendering_metrics_collector: RenderingMetricsCollector::new(window_weak.clone()),
             rendering_notifier: Default::default(),
+            image_cache: Default::default(),
             #[cfg(target_arch = "wasm32")]
             canvas_id,
             #[cfg(target_arch = "wasm32")]
@@ -205,8 +209,12 @@ impl WinitWindow for GLWindow {
                 );
             }
 
-            let mut renderer =
-                crate::skiarenderer::SkiaRenderer::new(canvas, self.clone(), scale_factor);
+            let mut renderer = crate::skiarenderer::SkiaRenderer::new(
+                canvas,
+                self.clone(),
+                scale_factor,
+                &self.image_cache,
+            );
 
             for (component, origin) in components {
                 corelib::item_rendering::render_component_items(component, &mut renderer, *origin);
