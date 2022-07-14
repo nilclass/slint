@@ -307,7 +307,10 @@ impl<'a> ItemRenderer for SkiaRenderer<'a> {
             self.scale_factor,
             string,
             Some(text_style),
-            if text.wrap() == TextWrap::word_wrap { Some(max_width) } else { None },
+            (Some(max_width), Some(max_height)),
+            (text.horizontal_alignment(), text.vertical_alignment()),
+            text.overflow(),
+            text.wrap(),
         );
 
         layout.paint(&mut self.canvas, skia_safe::Point::default());

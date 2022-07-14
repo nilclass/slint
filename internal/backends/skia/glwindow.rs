@@ -621,7 +621,10 @@ impl PlatformWindow for GLWindow {
             scale_factor,
             text,
             None,
-            max_width.map(|w| w * scale_factor),
+            (max_width.map(|w| w * scale_factor), None),
+            Default::default(),
+            Default::default(),
+            Default::default(),
         );
 
         [layout.max_intrinsic_width() / scale_factor, layout.height() / scale_factor].into()
