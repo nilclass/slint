@@ -29,9 +29,14 @@ testing = ["i-slint-backend-testing"] # Enable some function used by the integra
 backend-gl-all = ["i-slint-backend-selector/backend-gl-all"]
 backend-gl-wayland = ["i-slint-backend-selector/backend-gl-wayland"]
 backend-gl-x11 = ["i-slint-backend-selector/backend-gl-x11"]
+backend-skia-all = ["i-slint-backend-selector/backend-skia-all"]
+backend-skia-wayland = ["i-slint-backend-selector/backend-skia-wayland"]
+backend-skia-x11 = ["i-slint-backend-selector/backend-skia-x11"]
+
 
 rtti-qt = ["i-slint-backend-selector/rtti-qt"]
 rtti-gl = ["i-slint-backend-selector/rtti-gl"]
+rtti-skia = ["i-slint-backend-selector/rtti-skia"]
 
 default = ["backend-gl-all", "backend-qt"]
 

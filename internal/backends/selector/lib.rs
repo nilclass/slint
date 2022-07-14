@@ -3,7 +3,14 @@
 
 #![doc = include_str!("README.md")]
 #![doc(html_logo_url = "https://slint-ui.com/logo/slint-logo-square-light.svg")]
-#![cfg_attr(not(any(feature = "i-slint-backend-qt", feature = "i-slint-backend-gl")), no_std)]
+#![cfg_attr(
+    not(any(
+        feature = "i-slint-backend-qt",
+        feature = "i-slint-backend-gl",
+        feature = "i-slint-backend-skia"
+    )),
+    no_std
+)]
 
 use core::pin::Pin;
 
@@ -12,13 +19,16 @@ cfg_if::cfg_if! {
         use i_slint_backend_qt as default_backend;
     } else if #[cfg(feature = "i-slint-backend-gl")] {
         use i_slint_backend_gl as default_backend;
+    }else if #[cfg(feature = "i-slint-backend-skia")] {
+        use i_slint_backend_skia as default_backend;
     }
 }
 
 cfg_if::cfg_if! {
     if #[cfg(any(
             all(feature = "i-slint-backend-qt", not(no_qt)),
-            feature = "i-slint-backend-gl"
+            feature = "i-slint-backend-gl",
+            feature = "i-slint-backend-skia"
         ))] {
         pub fn backend() -> &'static dyn i_slint_core::backend::Backend {
             i_slint_core::backend::instance_or_init(|| {
@@ -43,10 +53,6 @@ cfg_if::cfg_if! {
                     return Box::new(i_slint_backend_skia::Backend);
                 }
 
-                #[cfg(any(
-                    feature = "i-slint-backend-qt",
-                    feature = "i-slint-backend-gl"
-                ))]
                 if !backend_config.is_empty() {
                     eprintln!("Could not load rendering backend {}, fallback to default", backend_config)
                 }

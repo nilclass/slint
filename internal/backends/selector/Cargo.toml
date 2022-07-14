@@ -18,7 +18,10 @@ path = "lib.rs"
 backend-gl-all = ["backend-gl-x11", "backend-gl-wayland"]
 backend-gl-wayland = ["i-slint-backend-gl/wayland"]
 backend-gl-x11 = ["i-slint-backend-gl/x11"]
-backend-skia = ["i-slint-backend-skia"]
+backend-skia-all = ["backend-skia-x11", "backend-skia-wayland"]
+backend-skia-wayland = ["i-slint-backend-skia/wayland"]
+backend-skia-x11 = ["i-slint-backend-skia/x11"]
+
 
 rtti-gl = ["i-slint-backend-gl/rtti"]
 rtti-qt = ["i-slint-backend-qt/rtti"]
