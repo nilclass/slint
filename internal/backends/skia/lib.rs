@@ -91,7 +91,7 @@ impl i_slint_core::backend::Backend for Backend {
         data: &'static [u8],
     ) -> Result<(), Box<dyn std::error::Error>> {
         //self::fonts::register_font_from_memory(data)
-        todo!()
+        Err("register_font_from_memory not implemented".into())
     }
 
     fn register_font_from_path(
