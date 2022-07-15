@@ -369,13 +369,18 @@ impl<'a> ItemRenderer for SkiaRenderer<'a> {
             self.scale_factor,
             string,
             Some(text_style),
-            (Some(max_width), Some(max_height)),
-            (text.horizontal_alignment(), text.vertical_alignment()),
+            Some(max_width),
+            text.horizontal_alignment(),
             text.overflow(),
-            text.wrap(),
         );
 
-        layout.paint(&mut self.canvas, skia_safe::Point::default());
+        let y = match text.vertical_alignment() {
+            items::TextVerticalAlignment::top => 0.,
+            items::TextVerticalAlignment::center => (max_height - layout.height()) / 2.,
+            items::TextVerticalAlignment::bottom => (max_height - layout.height()),
+        };
+
+        layout.paint(&mut self.canvas, skia_safe::Point::new(0., y));
     }
 
     fn draw_text_input(

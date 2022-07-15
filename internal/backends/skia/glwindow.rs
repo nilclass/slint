@@ -621,8 +621,7 @@ impl PlatformWindow for GLWindow {
             scale_factor,
             text,
             None,
-            (max_width.map(|w| w * scale_factor), None),
-            Default::default(),
+            max_width.map(|w| w * scale_factor),
             Default::default(),
             Default::default(),
         );
