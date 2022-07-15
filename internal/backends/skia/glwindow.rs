@@ -626,7 +626,8 @@ impl PlatformWindow for GLWindow {
             Default::default(),
         );
 
-        [layout.max_intrinsic_width() / scale_factor, layout.height() / scale_factor].into()
+        [layout.max_intrinsic_width().ceil() / scale_factor, layout.height().ceil() / scale_factor]
+            .into()
     }
 
     fn text_input_byte_offset_for_position(
