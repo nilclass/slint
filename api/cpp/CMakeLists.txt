@@ -81,6 +81,10 @@ define_cargo_feature(backend-gl-all "Enable OpenGL ES 2.0 based rendering backen
 define_cargo_feature(backend-gl-x11 "Enable the OpenGL ES 2.0 backend with only X11 support on Unix. Enable this option and turn off SLINT_FEATURE_BACKEND_GL_ALL for a smaller build with just X11 support on Unix." OFF)
 define_cargo_feature(backend-gl-wayland "Enable the OpenGL ES 2.0 backend with wayland support on Unix. Enable this option and turn off SLINT_FEATURE_BACKEND_GL_ALL for a smaller build with just wayland support." OFF)
 
+define_cargo_feature(backend-skia-all "Enable the Skia backend." OFF)
+define_cargo_feature(backend-skia-x11 "Enable the Skia backend with only X11 support on Unix. Enable this option and turn off SLINT_FEATURE_BACKEND_SKIA_ALL for a smaller build with just X11 support on Unix." OFF)
+define_cargo_feature(backend-skia-wayland "Enable the Skia backend with wayland support on Unix. Enable this option and turn off SLINT_FEATURE_BACKEND_SKIA_ALL for a smaller build with just wayland support." OFF)
+
 define_cargo_feature(backend-qt "Enable Qt based rendering backend" ON)
 
 if(SLINT_FEATURE_INTERPRETER)
@@ -89,6 +93,9 @@ if(SLINT_FEATURE_INTERPRETER)
     endif()
     if(SLINT_FEATURE_BACKEND_GL_ALL OR SLINT_FEATURE_BACKEND_GL_X11 OR SLINT_FEATURE_BACKEND_GL_WAYLAND)
         list(APPEND features rtti-gl)
+    endif()
+    if(SLINT_FEATURE_BACKEND_SKIA_ALL OR SLINT_FEATURE_BACKEND_SKIA_X11 OR SLINT_FEATURE_BACKEND_SKIA_WAYLAND)
+        list(APPEND features rtti-skia)
     endif()
 endif()
 
