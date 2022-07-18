@@ -144,6 +144,37 @@ else (SLINT_STYLE)
     set_property(GLOBAL PROPERTY SLINT_STYLE ${SLINT_STYLE_DEFAULT})
 endif(SLINT_STYLE)
 
+if(SLINT_FEATURE_BACKEND_SKIA_ALL OR SLINT_FEATURE_BACKEND_SKIA_X11 OR SLINT_FEATURE_BACKEND_SKIA_WAYLAND)
+    # Workaround: skia-bindings uses CC/CXX as compilers for clang, which Yocto sets to the target compiler (good).
+    # Unfortunately skia-bindings assumes that CC/CXX is clang and also adds --target= to the command line, which
+    # doesn't work with gcc. So until that's fixed, force the Skia build to use clang by setting CC/CXX.
+    # This should be fine since Corrosion sets CXX_<target> and HOST_CXX for cc.rs and otherwise CC/CXX should be
+    #unused.
+    set_property(
+        TARGET slint-cpp
+        APPEND
+        PROPERTY CORROSION_ENVIRONMENT_VARIABLES
+        CC="clang"
+    )
+    set_property(
+        TARGET slint-cpp
+        APPEND
+        PROPERTY CORROSION_ENVIRONMENT_VARIABLES
+        CXX="clang++"
+    )
+
+    # The Skia build needs to know the sysroot for invoking clang correctly and expects it in
+    # the SDKROOT environment variable.
+    if(CMAKE_SYSROOT)
+        set_property(
+            TARGET slint-cpp
+            APPEND
+            PROPERTY CORROSION_ENVIRONMENT_VARIABLES
+            SDKROOT=${CMAKE_SYSROOT}
+        )
+    endif()
+endif()
+
 file(GLOB api_headers RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/include/"
     "${CMAKE_CURRENT_SOURCE_DIR}/include/*.h")
 
