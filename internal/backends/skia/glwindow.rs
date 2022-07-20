@@ -49,6 +49,8 @@ pub struct GLWindow {
 
     #[cfg(target_arch = "wasm32")]
     virtual_keyboard_helper: RefCell<Option<super::wasm_input_helper::WasmInputHelper>>,
+
+    frame_count: Cell<usize>,
 }
 
 impl GLWindow {
@@ -77,6 +79,7 @@ impl GLWindow {
             canvas_id,
             #[cfg(target_arch = "wasm32")]
             virtual_keyboard_helper: Default::default(),
+            frame_count: Default::default(),
         })
     }
 
@@ -193,40 +196,68 @@ impl WinitWindow for GLWindow {
                 );
             }
 
-            let canvas = surface.canvas();
+            let render_into_canvas = |canvas: &mut skia_safe::Canvas| {
+                canvas.clear(crate::skiarenderer::to_skia_color(&window.clear_color));
 
-            canvas.clear(crate::skiarenderer::to_skia_color(&window.clear_color));
+                // For the BeforeRendering rendering notifier callback it's important that this happens *after* clearing
+                // the back buffer, in order to allow the callback to provide its own rendering of the background.
+                // femtovg's clear_rect() will merely schedule a clear call, so flush right away to make it immediate.
+                if self.has_rendering_notifier() {
+                    canvas.flush();
 
-            // For the BeforeRendering rendering notifier callback it's important that this happens *after* clearing
-            // the back buffer, in order to allow the callback to provide its own rendering of the background.
-            // femtovg's clear_rect() will merely schedule a clear call, so flush right away to make it immediate.
-            if self.has_rendering_notifier() {
-                canvas.flush();
+                    self.invoke_rendering_notifier(
+                        RenderingState::BeforeRendering,
+                        &window.opengl_context,
+                    );
+                }
 
-                self.invoke_rendering_notifier(
-                    RenderingState::BeforeRendering,
-                    &window.opengl_context,
+                let mut renderer = crate::skiarenderer::SkiaRenderer::new(
+                    canvas,
+                    self.clone(),
+                    scale_factor,
+                    &self.image_cache,
                 );
-            }
 
-            let mut renderer = crate::skiarenderer::SkiaRenderer::new(
-                canvas,
-                self.clone(),
-                scale_factor,
-                &self.image_cache,
-            );
+                for (component, origin) in components {
+                    corelib::item_rendering::render_component_items(
+                        component,
+                        &mut renderer,
+                        *origin,
+                    );
+                }
 
-            for (component, origin) in components {
-                corelib::item_rendering::render_component_items(component, &mut renderer, *origin);
-            }
+                if let Some(collector) = &self.rendering_metrics_collector {
+                    collector.measure_frame_rendered(&mut renderer);
+                }
 
-            if let Some(collector) = &self.rendering_metrics_collector {
-                collector.measure_frame_rendered(&mut renderer);
-            }
+                drop(renderer);
 
-            drop(renderer);
+                canvas.flush();
+            };
 
-            canvas.flush();
+            let surface_canvas = surface.canvas();
+
+            if matches!(std::env::var("SLINT_SKIA_RECORD_FRAMES"), Ok(_)) {
+                let mut recorder = skia_safe::PictureRecorder::new();
+                let canvas = recorder.begin_recording(
+                    skia_safe::Rect::from_wh(size.width as f32, size.height as f32),
+                    None,
+                );
+                render_into_canvas(canvas);
+                drop(canvas);
+                let picture = recorder.finish_recording_as_picture(None).unwrap();
+
+                let data = picture.serialize();
+
+                std::fs::write(format!("frame_{}.skp", self.frame_count.get()), data.as_bytes())
+                    .ok();
+                self.frame_count.set(self.frame_count.get() + 1);
+
+                surface_canvas.draw_picture(picture, None, None);
+                surface_canvas.flush();
+            } else {
+                render_into_canvas(surface_canvas)
+            };
 
             self.invoke_rendering_notifier(RenderingState::AfterRendering, &window.opengl_context);
 
