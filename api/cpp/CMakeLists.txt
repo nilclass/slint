@@ -150,6 +150,7 @@ if(SLINT_FEATURE_BACKEND_SKIA_ALL OR SLINT_FEATURE_BACKEND_SKIA_X11 OR SLINT_FEA
     # doesn't work with gcc. So until that's fixed, force the Skia build to use clang by setting CC/CXX.
     # This should be fine since Corrosion sets CXX_<target> and HOST_CXX for cc.rs and otherwise CC/CXX should be
     #unused.
+
     set_property(
         TARGET slint-cpp
         APPEND
@@ -173,6 +174,20 @@ if(SLINT_FEATURE_BACKEND_SKIA_ALL OR SLINT_FEATURE_BACKEND_SKIA_X11 OR SLINT_FEA
             SDKROOT=${CMAKE_SYSROOT}
         )
     endif()
+
+    # Furthermore, for cross-compiling, clang might need to know where
+    # the correct gcc toolchain is located, so forward that to the cargo
+    # build, too
+
+    if(CMAKE_CXX_COMPILER_EXTERNAL_TOOLCHAIN)
+        set_property(
+            TARGET slint-cpp
+            APPEND
+            PROPERTY CORROSION_ENVIRONMENT_VARIABLES
+            SKIA_EXTRA_CFLAGS="--gcc-toolchain=${CMAKE_CXX_COMPILER_EXTERNAL_TOOLCHAIN}"
+        )
+    endif()
+
 endif()
 
 file(GLOB api_headers RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/include/"
