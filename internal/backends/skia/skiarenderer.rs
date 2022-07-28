@@ -575,7 +575,7 @@ impl<'a> ItemRenderer for SkiaRenderer<'a> {
         rect: i_slint_core::graphics::Rect,
         radius: i_slint_core::Coord,
         border_width: i_slint_core::Coord,
-    ) {
+    ) -> bool {
         let mut rect = to_skia_rect(&rect.scale(self.scale_factor, self.scale_factor));
         let mut border_width = border_width * self.scale_factor;
         // In CSS the border is entirely towards the inside of the boundary
@@ -587,6 +587,7 @@ impl<'a> ItemRenderer for SkiaRenderer<'a> {
         let radius = radius * self.scale_factor;
         let rounded_rect = skia_safe::RRect::new_rect_xy(rect, radius, radius);
         self.canvas.clip_rrect(rounded_rect, None, true);
+        self.canvas.local_clip_bounds().is_some()
     }
 
     fn get_current_clip(&self) -> i_slint_core::graphics::Rect {
