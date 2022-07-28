@@ -566,7 +566,7 @@ impl PlatformWindow for GLWindow {
                 }
             }
 
-            collector.start(&format!("GL backend (windowing system: {})", winsys));
+            collector.start(&format!("Skia backend (windowing system: {})", winsys));
         }
 
         drop(platform_window);
