@@ -90,16 +90,14 @@ impl i_slint_core::backend::Backend for Backend {
         &'static self,
         data: &'static [u8],
     ) -> Result<(), Box<dyn std::error::Error>> {
-        //self::fonts::register_font_from_memory(data)
-        Err("register_font_from_memory not implemented".into())
+        self::textlayout::register_font_from_memory(data)
     }
 
     fn register_font_from_path(
         &'static self,
         path: &std::path::Path,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        //        self::fonts::register_font_from_path(path)
-        Err("register_font_from_path not implemented".into())
+        self::textlayout::register_font_from_path(path)
     }
 
     fn set_clipboard_text(&'static self, text: String) {
