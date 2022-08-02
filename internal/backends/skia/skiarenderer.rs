@@ -248,8 +248,8 @@ impl<'a> SkiaRenderer<'a> {
         self.canvas.concat(&transform);
 
         let filter_mode: skia_safe::sampling_options::SamplingOptions = match rendering {
-            ImageRendering::Smooth => skia_safe::sampling_options::FilterMode::Linear,
-            ImageRendering::Pixelated => skia_safe::sampling_options::FilterMode::Nearest,
+            ImageRendering::smooth => skia_safe::sampling_options::FilterMode::Linear,
+            ImageRendering::pixelated => skia_safe::sampling_options::FilterMode::Nearest,
         }
         .into();
 
