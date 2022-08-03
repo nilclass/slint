@@ -681,6 +681,7 @@ impl ItemRenderer for GLItemRenderer {
         if layer_item.cache_rendering_hint() {
             self.render_and_blend_layer(1.0, self_rc)
         } else {
+            self.graphics_window.graphics_cache.release(self_rc);
             RenderingResult::ContinueRenderingChildren
         }
     }
