@@ -1,6 +1,7 @@
 // Copyright © SixtyFPS GmbH <info@slint-ui.com>
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
 
+import { LineEditInner } from "../common/common.slint";
 import { StateLayer } from "comp-state-layer.slint";
 import { md } from "md.slint";
 
@@ -9,7 +10,8 @@ export component Item inherits Rectangle {
     callback clicked <=> state-layer.clicked;
 
     in property<bool> selected;
-    in property<string> text;
+    in-out property<string> text;
+    in property<bool> editable;
 
     // background: md.sys.color.background;
     height: 48px;
@@ -20,20 +22,39 @@ export component Item inherits Rectangle {
         selection-background: md.sys.color.secondary-container; 
         ripple-color: md.sys.color.primary-ripple;
         has-ripple: true;
+        enabled: !root.editable;
     }
 
     HorizontalLayout {
         padding-left: 12px;
         padding-right: 12px;
 
-        label := Text {
-            text: root.text;
-            color: md.sys.color.on-surface;
-            vertical-alignment: center;
-            // FIXME after Roboto font can be loaded
-            //font-family: md.sys.typescale.label-large.font;
-            font-size: md.sys.typescale.label-large.size;
-            font-weight: md.sys.typescale.label-large.weight;
+        Rectangle {  
+            line-edit := LineEditInner {
+                y: (parent.height - self.height) / 2;
+                opacity: self.has-focus ? 1.0 : 0.0;
+                visible: root.editable;
+                text: root.text;
+                font-size: label.font-size;
+
+                edited => {  
+                    root.text = self.text;
+                }
+            }
+
+            label := Text {
+                width: 100%;
+                // height: 100%;
+                visible: !root.editable || !line-edit.has-focus;
+                text: root.text;
+                color: md.sys.color.on-surface;
+                vertical-alignment: center;
+                horizontal-alignment: left;
+                // FIXME after Roboto font can be loaded
+                //font-family: md.sys.typescale.label-large.font;
+                font-size: md.sys.typescale.label-large.size;
+                font-weight: md.sys.typescale.label-large.weight;
+            }
         }
     }
 

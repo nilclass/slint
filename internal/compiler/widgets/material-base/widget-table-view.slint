@@ -155,6 +155,7 @@ export component StandardTableView inherits Rectangle {
                                 opacity: self.has-focus ? 1.0 : 0.0;
                                 visible: cell.editable;
                                 text: cell.text;
+                                y: (parent.height - self.height) / 2;
                                 edited => {  
                                     cell.text = self.text;
                                 }

@@ -44,5 +44,24 @@ export ListViewPage := Page {
                 ];
             }
         }
+
+        GroupBox {  
+            title: "StandardListView (editable)";
+            vertical-stretch: 0;
+
+            StandardListView {
+                model: [
+                    {text: "Lorem", editable: true },
+                    {text: "Lorem", editable: true },
+                    {text: "Lorem", editable: true },
+                    {text: "Lorem", editable: true },
+                    {text: "Lorem", editable: true },
+                    {text: "Lorem", editable: true },
+                    {text: "Lorem", editable: true },
+                    {text: "Lorem", editable: true },
+                    {text: "Lorem", editable: true },
+                ];
+            }
+        }
     }
 }
