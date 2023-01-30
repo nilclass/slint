@@ -483,7 +483,7 @@ pub struct ClickState {
 impl ClickState {
     /// Resets the timer and count.
     pub fn restart(&self) {
-        self.click_count.set(1);
+        self.click_count.set(0);
         self.click_count_time_stamp.set(Some(crate::animations::Instant::now()));
     }
 
