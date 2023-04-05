@@ -336,3 +336,10 @@ fn test_window_accessor() {
     let slint_window = app.window();
     assert!(slint_window.has_winit_window());
 }
+
+#[cfg(target_os = "android")]
+pub fn android_init(
+    android_app: winit::platform::android::activity::AndroidApp,
+) -> Result<(), String> {
+    event_loop::ANDROID_APP.set(android_app).map_err(|_| "android_init called twice".into())
+}
