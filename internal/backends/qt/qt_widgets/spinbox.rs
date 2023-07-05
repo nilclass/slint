@@ -206,7 +206,17 @@ impl Item for NativeSpinBox {
         if !self.enabled() || event.event_type != KeyEventType::KeyPressed {
             return KeyEventResult::EventIgnored;
         }
-        if event.text.starts_with(i_slint_core::input::key_codes::UpArrow)
+
+        if event.text.parse::<u32>().is_ok() {
+            let mut value = self.value().to_string();
+            value.push_str(event.text.as_str());
+
+            if let Ok(value) = value.parse::<i32>() {
+                self.value.set(value);
+            }
+
+            KeyEventResult::EventAccepted
+        } else if event.text.starts_with(i_slint_core::input::key_codes::UpArrow)
             && self.value() < self.maximum()
         {
             self.value.set(self.value() + 1);
