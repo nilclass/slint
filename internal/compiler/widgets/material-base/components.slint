@@ -32,7 +32,7 @@ export component Ripple inherits Rectangle {
 export component StateLayer inherits TouchArea {
     in property <bool> focusable;
     in property <brush> selection-background;
-    in property <brush> ripple-color;
+    in property <brush> ripple-color: Palette.ripple;
     in property <bool> has-ripple;
     in property <length> border-radius;
     out property <bool> has-focus <=> i-focus-scope.has-focus;
@@ -105,7 +105,6 @@ export component ListItem inherits Rectangle {
         checked: root.selected;
         background: Palette.primary;
         selection-background: Palette.secondary-container;
-        ripple-color: Palette.primary-ripple;
         has-ripple: true;
     }
 
