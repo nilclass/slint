@@ -41,7 +41,7 @@ export global Elevation {
 
 export global Palette {
     in-out property <bool> dark-color-scheme: ColorSchemeSelector.dark-color-scheme;
-    in-out property <brush> accent-color: #21005D;
+    in-out property <brush> accent-color: #FFFBFE;
 
     out property <brush> background: !root.dark-color-scheme ? #f8f3f9 : #2a282d;
     out property <brush> surface: !root.dark-color-scheme ? #FFFBFE : #1C1B1F;
@@ -49,7 +49,7 @@ export global Palette {
     out property <brush> on-surface: !root.dark-color-scheme ? #1C1B1F : #E6E1E5;
     out property <brush> on-surface-variant: !root.dark-color-scheme ? #49454E : #CAC4D0;
     out property <brush> surface-tint: !root.dark-color-scheme ? #FFFFFF1A : #0000001A;
-    out property <brush> primary: !root.dark-color-scheme ? accent-color.brighter(30%) : accent-color.brighter(1.8);
+    out property <brush> primary: !root.dark-color-scheme ? accent-color.brighter(30%) : accent-color.darker(0.2);
     out property <brush> primary-container: !root.dark-color-scheme ? accent-color.brighter(10) : accent-color.brighter(20%);
     out property <brush> on-primary: !root.dark-color-scheme ? #ffffff : accent-color.brighter(20%);
     out property <brush> shadow: #000000;
