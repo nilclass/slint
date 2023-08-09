@@ -5,7 +5,7 @@ use crate::{JsBrush, JsImageData, JsModel};
 use i_slint_compiler::langtype::Type;
 use i_slint_core::graphics::{Image, Rgba8Pixel, SharedPixelBuffer};
 use i_slint_core::model::ModelRc;
-use i_slint_core::{Brush, Color};
+use i_slint_core::{Brush, Color, SharedVector};
 use napi::{
     bindgen_prelude::*, Env, JsBoolean, JsExternal, JsNumber, JsObject, JsString, JsUnknown, Result,
 };
@@ -179,7 +179,24 @@ pub fn to_value(env: &Env, unknown: JsUnknown, typ: Type) -> Result<Value> {
                     .collect::<Result<_, _>>()?,
             ))
         }
-        Type::Array(_) => todo!(),
+        Type::Array(a) => {
+            if unknown.is_array()? {
+                let array = Array::from_unknown(unknown)?;
+                let mut values = vec![];
+
+                for i in 0..(array.len() as usize) {
+                    if let Some(value) = array.get(i as u32)? {
+                        values.push(to_value(env, value, (*a).clone())?);
+                    }
+                }
+
+                Ok(Value::Model(ModelRc::new(i_slint_core::model::SharedVectorModel::from(
+                    SharedVector::from_slice(values.as_slice()),
+                ))))
+            } else {
+                Ok(Value::Void)
+            }
+        }
         Type::Enumeration(_) => todo!(),
         Type::Invalid
         | Type::Void

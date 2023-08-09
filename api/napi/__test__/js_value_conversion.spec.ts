@@ -338,3 +338,13 @@ test('invoke callback', (t) => {
   t.deepEqual(instance!.invoke("get-string", []), "string");
   t.deepEqual(instance!.invoke("person", []), { "name": "florian" });
 })
+
+test('Array model', (t) => {
+  let compiler = new ComponentCompiler;
+  let definition = compiler.buildFromSource(`export component App { in-out property <[int]> model: []; }`, "");
+  t.not(definition, null);
+
+  let instance = definition!.create();
+  t.not(instance, null);
+
+})
