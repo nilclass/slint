@@ -1,10 +1,17 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
-use i_slint_core::model::{Model, ModelRc, VecModel};
+use i_slint_core::model::{Model, ModelRc, VecModel, ModelNotify};
 use napi::bindgen_prelude::External;
 use napi_derive::napi;
 use slint_interpreter::Value;
+
+#[napi(js_name = ModelNotify)]
+pub struct JsModelNotify {
+    notify: ModelNotify
+}
+
+#[napi]
 
 #[napi(js_name = Model)]
 pub struct JsModel {
@@ -30,7 +37,11 @@ impl JsModel {
     }
 
     #[napi(getter)]
+
+
+    #[napi(getter)]
     pub fn model(&self) -> External<ModelRc<Value>> {
         External::new(self.inner.clone())
     }
 }
+
