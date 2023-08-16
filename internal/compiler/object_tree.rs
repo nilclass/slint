@@ -566,6 +566,7 @@ pub struct Element {
     pub base_type: ElementType,
     /// Currently contains also the callbacks. FIXME: should that be changed?
     pub bindings: BindingsMap,
+    pub change_callbacks: BTreeMap<String, RefCell<Vec<Expression>>>,
     pub property_analysis: RefCell<HashMap<String, PropertyAnalysis>>,
 
     pub children: Vec<ElementRc>,
@@ -686,6 +687,14 @@ pub fn pretty_print(
         for nr in &expr.two_way_bindings {
             indent!();
             writeln!(f, "{} <=> {:?};", name, nr)?;
+        }
+    }
+    for (name, ch) in &e.change_callbacks {
+        for ex in &*ch.borrow() {
+            indent!();
+            writeln!(f, "changed {name} => {{ ")?;
+            expression_tree::pretty_print(f, ex)?;
+            writeln!(f, "  }}")?;
         }
     }
     if !e.states.is_empty() {
@@ -1215,6 +1224,32 @@ impl Element {
                         "Can only refer to property in the current element".into(),
                         &prop_name_token,
                     ),
+                }
+            }
+        }
+
+        for ch in node.PropertyChangedCallback() {
+            let Some(prop) = parser::identifier_text(&ch.DeclaredIdentifier()) else { continue };
+            let lookup_result = r.lookup_property(&prop);
+            if lookup_result.property_visibility == PropertyVisibility::Private
+                && !lookup_result.is_local_to_component
+            {
+                diag.push_error(
+                    format!("Change callback on a private property '{prop}'"),
+                    &ch.DeclaredIdentifier(),
+                );
+            }
+            let handler = Expression::Uncompiled(ch.CodeBlock().into());
+            match r.change_callbacks.entry(prop) {
+                Entry::Vacant(e) => {
+                    e.insert(vec![handler].into());
+                }
+                Entry::Occupied(mut e) => {
+                    diag.push_error(
+                        format!("Duplicated change callback on '{}'", e.key()),
+                        &ch.DeclaredIdentifier(),
+                    );
+                    e.get_mut().get_mut().push(handler);
                 }
             }
         }
@@ -1982,6 +2017,13 @@ pub fn visit_element_expressions(
         elem.borrow_mut().repeated = Some(r)
     }
     visit_element_expressions_simple(elem, &mut vis);
+
+    for (name, expr) in &elem.borrow().change_callbacks {
+        for expr in expr.borrow_mut().iter_mut() {
+            vis(expr, Some(name.as_str()), &|| elem.borrow().lookup_property(name).property_type);
+        }
+    }
+
     let mut states = std::mem::take(&mut elem.borrow_mut().states);
     for s in &mut states {
         if let Some(cond) = s.condition.as_mut() {
