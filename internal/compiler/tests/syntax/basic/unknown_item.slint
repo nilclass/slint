@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 struct Struct := { def: int, }
 
@@ -17,6 +17,7 @@ export SuperSimple := Rectangle {
             background: blue;
             foo_bar: blue;
 //          ^error{Unknown property foo-bar in Rectangle}
+//                   ^^error{Unknown unqualified identifier 'blue'}
         }
     }
 
@@ -39,6 +40,7 @@ export SuperSimple := Rectangle {
     Rectangle {
         foo_bar: blue;
 //      ^error{Unknown property foo-bar in Rectangle}
+//               ^^error{Unknown unqualified identifier 'blue'}
     }
 
     NativeLineEdit { }

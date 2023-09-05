@@ -1,8 +1,8 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 use super::PropertyReference;
-use crate::expression_tree::{BuiltinFunction, OperatorClass};
+use crate::expression_tree::{BuiltinFunction, MinMaxOp, OperatorClass};
 use crate::langtype::Type;
 use crate::layout::Orientation;
 use itertools::Either;
@@ -161,7 +161,7 @@ pub enum Expression {
         repeater_index: Option<Box<Expression>>,
     },
     /// Will call the sub_expression, with the cell variable set to the
-    /// array the array of BoxLayoutCellData form the elements
+    /// array of BoxLayoutCellData from the elements
     BoxLayoutFunction {
         /// The local variable (as read with [`Self::ReadLocalVariable`]) that contains the sell
         cells_variable: String,
@@ -180,6 +180,13 @@ pub enum Expression {
         /// This is an Expression::Array
         unsorted_cells: Box<Expression>,
     },
+
+    MinMax {
+        ty: Type,
+        op: MinMaxOp,
+        lhs: Box<Expression>,
+        rhs: Box<Expression>,
+    },
 }
 
 impl Expression {
@@ -187,6 +194,7 @@ impl Expression {
         Some(match ty {
             Type::Invalid
             | Type::Callback { .. }
+            | Type::ComponentFactory
             | Type::Function { .. }
             | Type::Void
             | Type::InferredProperty
@@ -292,6 +300,7 @@ impl Expression {
             Self::ComputeDialogLayoutCells { .. } => {
                 Type::Array(super::lower_expression::grid_layout_cell_data_ty().into())
             }
+            Self::MinMax { ty, .. } => ty.clone(),
         }
     }
 }
@@ -373,6 +382,10 @@ macro_rules! visit_impl {
             Expression::ComputeDialogLayoutCells { roles, unsorted_cells, .. } => {
                 $visitor(roles);
                 $visitor(unsorted_cells);
+            }
+            Expression::MinMax { ty: _, op: _, lhs, rhs } => {
+                $visitor(lhs);
+                $visitor(rhs);
             }
         }
     };

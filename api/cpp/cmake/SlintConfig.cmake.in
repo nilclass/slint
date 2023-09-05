@@ -1,5 +1,5 @@
-# Copyright © SixtyFPS GmbH <info@slint-ui.com>
-# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+# Copyright © SixtyFPS GmbH <info@slint.dev>
+# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 @PACKAGE_INIT@
 
@@ -11,8 +11,8 @@ if(_IMPORT_PREFIX STREQUAL "/")
   set(_IMPORT_PREFIX "")
 endif()
 
-add_library(slint-cpp-shared SHARED IMPORTED)
-set_target_properties(slint-cpp-shared PROPERTIES @SLINT_LIB_PROPERTIES@)
+add_library(@slint_cpp_impl@ @cmake_lib_type@ IMPORTED)
+set_target_properties(@slint_cpp_impl@ PROPERTIES @SLINT_LIB_PROPERTIES@)
 
 if (@SLINT_FEATURE_COMPILER@)
     add_executable(Slint::slint-compiler IMPORTED GLOBAL)

@@ -1,10 +1,20 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: MIT
 
 #include "gallery.h"
 
+#ifdef HAVE_GETTEXT
+#    include <locale>
+#    include <libintl.h>
+#endif
+
 int main()
 {
+#ifdef HAVE_GETTEXT
+    bindtextdomain("gallery", SRC_DIR "/lang/");
+    std::locale::global(std::locale(""));
+#endif
+
     auto demo = App::create();
 
     auto row_data = std::make_shared<

@@ -1,10 +1,7 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 //! The implementation details behind the Flickable
-
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
 
 //! The `Flickable` item
 
@@ -57,7 +54,7 @@ pub struct Flickable {
 }
 
 impl Item for Flickable {
-    fn init(self: Pin<&Self>, _window_adapter: &Rc<dyn WindowAdapter>) {}
+    fn init(self: Pin<&Self>, _self_rc: &ItemRc) {}
 
     fn geometry(self: Pin<&Self>) -> LogicalRect {
         LogicalRect::new(
@@ -162,7 +159,7 @@ pub struct FlickableDataBox(core::ptr::NonNull<FlickableData>);
 
 impl Default for FlickableDataBox {
     fn default() -> Self {
-        FlickableDataBox(Box::leak(Box::new(FlickableData::default())).into())
+        FlickableDataBox(Box::leak(Box::<FlickableData>::default()).into())
     }
 }
 impl Drop for FlickableDataBox {
@@ -240,7 +237,7 @@ impl FlickableData {
                         if crate::animations::current_tick() - pressed_time > DURATION_THRESHOLD {
                             return false;
                         }
-                        // Check if the mouse was moved more than the DISTANCE_THRESHEOLD in a
+                        // Check if the mouse was moved more than the DISTANCE_THRESHOLD in a
                         // direction in which the flickable can flick
                         let diff = position - inner.pressed_pos;
                         let w = flick.width();

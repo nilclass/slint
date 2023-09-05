@@ -1,3 +1,4 @@
+<!-- Copyright © SixtyFPS GmbH <info@slint.dev> ; SPDX-License-Identifier: MIT -->
 # Game Logic In Rust
 
 We'll implement the rules of the game in Rust as well. The general philosophy of Slint is that merely the user
@@ -34,7 +35,7 @@ Insert this code before the `main_window.run()` call:
 {{#include main_game_logic_in_rust.rs:game_logic}}
 ```
 
-Notice that we take a [Weak](https://slint-ui.com/docs/rust/slint/struct.weak) pointer of our `main_window`. This is very
+Notice that we take a [Weak](https://slint.dev/docs/rust/slint/struct.Weak) pointer of our `main_window`. This is very
 important because capturing a copy of the `main_window` itself within the callback handler would result in a circular ownership.
 The `MainWindow` owns the callback handler, which itself owns a reference to the `MainWindow`, which must be weak
 instead of strong to avoid a memory leak.

@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: MIT
 use slint::{Model, ModelExt, SharedString, StandardListViewItem, VecModel};
 use std::cell::RefCell;
 use std::rc::Rc;

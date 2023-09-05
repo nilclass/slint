@@ -1,5 +1,7 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+
+#![allow(clippy::identity_op)] // We use x + 0 a lot here for symetry
 
 //! This is the module for the functions that are drawing the pixels
 //! on the line buffer
@@ -9,8 +11,6 @@ use crate::graphics::{PixelFormat, Rgb8Pixel};
 use crate::lengths::{PointLengths, RectLengths, SizeLengths};
 use crate::Color;
 use derive_more::{Add, Mul, Sub};
-#[cfg(feature = "embedded-graphics")]
-use embedded_graphics::prelude::RgbColor as _;
 use integer_sqrt::IntegerSquareRoot;
 
 /// Draw one line of the texture in the line buffer
@@ -89,6 +89,7 @@ pub(super) fn draw_texture_line(
 }
 
 /// draw one line of the rounded rectangle in the line buffer
+#[allow(clippy::unnecessary_cast)] // Coord
 pub(super) fn draw_rounded_rectangle_line(
     span: &PhysicalRect,
     line: PhysicalLength,
@@ -337,10 +338,8 @@ pub(super) fn draw_gradient_line(
             if fill_col1 {
                 TargetPixel::blend_slice(&mut buffer[..l], g.color1);
             }
-        } else {
-            if fill_col2 {
-                TargetPixel::blend_slice(&mut buffer[..l], g.color2);
-            }
+        } else if fill_col2 {
+            TargetPixel::blend_slice(&mut buffer[..l], g.color2);
         }
         buffer = &mut buffer[l..];
         x = 0;
@@ -352,10 +351,8 @@ pub(super) fn draw_gradient_line(
             if fill_col2 {
                 TargetPixel::blend_slice(&mut buffer[l..], g.color2);
             }
-        } else {
-            if fill_col1 {
-                TargetPixel::blend_slice(&mut buffer[l..], g.color1);
-            }
+        } else if fill_col1 {
+            TargetPixel::blend_slice(&mut buffer[l..], g.color1);
         }
         buffer = &mut buffer[..l];
     }
@@ -411,7 +408,8 @@ pub(super) fn draw_gradient_line(
 /// the [`From`] trait. This conversion will pre-multiply the color
 /// components
 #[allow(missing_docs)]
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
 pub struct PremultipliedRgbaColor {
     pub red: u8,
     pub green: u8,
@@ -457,38 +455,6 @@ pub trait TargetPixel: Sized + Copy {
     fn from_rgb(red: u8, green: u8, blue: u8) -> Self;
 }
 
-#[cfg(feature = "embedded-graphics")]
-impl TargetPixel for embedded_graphics::pixelcolor::Rgb888 {
-    fn blend(&mut self, color: PremultipliedRgbaColor) {
-        let a = (u8::MAX - color.alpha) as u16;
-        *self = Self::new(
-            (self.r() as u16 * a / 255) as u8 + color.red,
-            (self.g() as u16 * a / 255) as u8 + color.green,
-            (self.b() as u16 * a / 255) as u8 + color.blue,
-        );
-    }
-
-    fn from_rgb(r: u8, g: u8, b: u8) -> Self {
-        Self::new(r, g, b)
-    }
-}
-
-#[cfg(feature = "embedded-graphics")]
-impl TargetPixel for embedded_graphics::pixelcolor::Rgb565 {
-    fn blend(&mut self, color: PremultipliedRgbaColor) {
-        let a = (u8::MAX - color.alpha) as u16;
-        *self = Self::new(
-            (((self.r() as u16) * a) / 255) as u8 + (color.red >> 3),
-            (((self.g() as u16) * a) / 255) as u8 + (color.green >> 2),
-            (((self.b() as u16) * a) / 255) as u8 + (color.blue >> 3),
-        )
-    }
-
-    fn from_rgb(r: u8, g: u8, b: u8) -> Self {
-        Self::new(r >> 3, g >> 2, b >> 3)
-    }
-}
-
 impl TargetPixel for crate::graphics::image::Rgb8Pixel {
     fn blend(&mut self, color: PremultipliedRgbaColor) {
         let a = (u8::MAX - color.alpha) as u16;
@@ -519,7 +485,7 @@ impl TargetPixel for PremultipliedRgbaColor {
 
 /// A 16bit pixel that has 5 red bits, 6 green bits and  5 blue bits
 #[repr(transparent)]
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Default, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Rgb565Pixel(pub u16);
 
 impl Rgb565Pixel {

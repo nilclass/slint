@@ -1,3 +1,4 @@
+<!-- Copyright © SixtyFPS GmbH <info@slint.dev> ; SPDX-License-Identifier: MIT -->
 # Slint development guide
 
 The build instructions are in the [building.md](./building.md) file.
@@ -18,10 +19,10 @@ their own repository and have their own version release at some point.
 
 The main library for the compiler for .slint.
 
-Nothing in there should depends on the runtime crates.
+Nothing in there should depend on the runtime crates.
 
 There is a **`test`** subdirectory that contains the syntax tests.
-These tests allow to test the proper error conditions.
+These tests allow you to test the proper error conditions.
 
 #### Runtime libraries
 
@@ -42,7 +43,7 @@ The library crates that are used at runtime.
 
 ### `api`
 
-Here one find the frontend for different language.
+Here one can find the frontends for different languages.
 
 ### `tests`
 
@@ -69,7 +70,7 @@ We use a rather complex mechanism to expose internal data structures implemented
 
 As a starting point, we recommend reading the blog entry we published about this:
 
-[https://slint-ui.com/blog/expose-rust-library-to-other-languages.html](https://slint-ui.com/blog/expose-rust-library-to-other-languages.html)
+[https://slint.dev/blog/expose-rust-library-to-other-languages.html](https://slint.dev/blog/expose-rust-library-to-other-languages.html)
 
 What this article omits are how we invoke cbindgen and what kind of tweaks we apply on various levels:
 

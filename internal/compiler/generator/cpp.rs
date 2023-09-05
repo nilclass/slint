@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 /*! module for the C++ code generator
 */
@@ -20,12 +20,12 @@ fn ident(ident: &str) -> String {
 /// return tokens to the `ItemRc`
 fn access_item_rc(pr: &llr::PropertyReference, ctx: &EvaluationContext) -> String {
     let mut ctx = ctx;
-    let mut component_access = "self".into();
+    let mut component_access = "self->".into();
 
     let pr = match pr {
         llr::PropertyReference::InParent { level, parent_reference } => {
             for _ in 0..level.get() {
-                component_access = format!("{}->parent", component_access);
+                component_access = format!("{component_access}parent->");
                 ctx = ctx.parent.as_ref().unwrap().ctx;
             }
             parent_reference
@@ -39,17 +39,14 @@ fn access_item_rc(pr: &llr::PropertyReference, ctx: &EvaluationContext) -> Strin
             let (sub_compo_path, sub_component) =
                 follow_sub_component_path(ctx.current_sub_component.unwrap(), sub_component_path);
             if !sub_component_path.is_empty() {
-                component_access = format!("{}->{}", &component_access, &sub_compo_path);
+                component_access += &sub_compo_path;
             }
-            let component_rc = format!("{}->self_weak.lock()->into_dyn()", &component_access);
+            let component_rc = format!("{component_access}self_weak.lock()->into_dyn()");
             let item_index_in_tree = sub_component.items[*item_index].index_in_tree;
             let item_index = if item_index_in_tree == 0 {
-                format!("{}->tree_index", &component_access)
+                format!("{component_access}tree_index")
             } else {
-                format!(
-                    "{}->tree_index_of_first_child + {} - 1",
-                    &component_access, item_index_in_tree
-                )
+                format!("{component_access}tree_index_of_first_child + {item_index_in_tree} - 1")
             };
 
             format!("{}, {}", &component_rc, item_index)
@@ -78,6 +75,7 @@ mod cpp_ast {
     #[derive(Default, Debug)]
     pub struct File {
         pub includes: Vec<String>,
+        pub after_includes: String,
         pub declarations: Vec<Declaration>,
         pub definitions: Vec<Declaration>,
     }
@@ -87,6 +85,7 @@ mod cpp_ast {
             for i in &self.includes {
                 writeln!(f, "#include {}", i)?;
             }
+            write!(f, "{}", self.after_includes)?;
             for d in &self.declarations {
                 write!(f, "\n{}", d)?;
             }
@@ -104,6 +103,7 @@ mod cpp_ast {
         Function(Function),
         Var(Var),
         TypeAlias(TypeAlias),
+        Enum(Enum),
     }
 
     #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -169,6 +169,26 @@ mod cpp_ast {
                 }
                 _ => None,
             })
+        }
+    }
+
+    #[derive(Default, Debug)]
+    pub struct Enum {
+        pub name: String,
+        pub values: Vec<String>,
+    }
+
+    impl Display for Enum {
+        fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+            indent(f)?;
+            writeln!(f, "enum class {} {{", self.name)?;
+            INDENTATION.with(|x| x.set(x.get() + 1));
+            for value in &self.values {
+                write!(f, "{value},")?;
+            }
+            INDENTATION.with(|x| x.set(x.get() - 1));
+            indent(f)?;
+            writeln!(f, "}};")
         }
     }
 
@@ -286,8 +306,8 @@ mod cpp_ast {
     }
 }
 
-use crate::expression_tree::{BuiltinFunction, EasingCurve};
-use crate::langtype::{ElementType, NativeClass, Type};
+use crate::expression_tree::{BuiltinFunction, EasingCurve, MinMaxOp};
+use crate::langtype::{ElementType, Enumeration, EnumerationValue, NativeClass, Type};
 use crate::layout::Orientation;
 use crate::llr::{
     self, EvaluationContext as llr_EvaluationContext, ParentCtx as llr_ParentCtx,
@@ -297,11 +317,25 @@ use crate::object_tree::Document;
 use crate::parser::syntax_nodes;
 use cpp_ast::*;
 use itertools::{Either, Itertools};
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 
-type EvaluationContext<'a> = llr_EvaluationContext<'a, String>;
-type ParentCtx<'a> = llr_ParentCtx<'a, String>;
+#[derive(Default)]
+struct ConditionalIncludes {
+    iostream: Cell<bool>,
+    cstdlib: Cell<bool>,
+    cmath: Cell<bool>,
+}
+
+#[derive(Clone)]
+struct CppGeneratorContext<'a> {
+    root_access: String,
+    conditional_includes: &'a ConditionalIncludes,
+}
+
+type EvaluationContext<'a> = llr_EvaluationContext<'a, CppGeneratorContext<'a>>;
+type ParentCtx<'a> = llr_ParentCtx<'a, CppGeneratorContext<'a>>;
 
 impl CppType for Type {
     fn cpp_type(&self) -> Option<String> {
@@ -335,7 +369,11 @@ impl CppType for Type {
             Type::Array(i) => Some(format!("std::shared_ptr<slint::Model<{}>>", i.cpp_type()?)),
             Type::Image => Some("slint::Image".to_owned()),
             Type::Enumeration(enumeration) => {
-                Some(format!("slint::cbindgen_private::{}", ident(&enumeration.name)))
+                if enumeration.node.is_some() {
+                    Some(ident(&enumeration.name))
+                } else {
+                    Some(format!("slint::cbindgen_private::{}", ident(&enumeration.name)))
+                }
             }
             Type::Brush => Some("slint::Brush".to_owned()),
             Type::LayoutCache => Some("slint::SharedVector<float>".into()),
@@ -476,8 +514,6 @@ pub fn generate(doc: &Document) -> impl std::fmt::Display {
 
     file.includes.push("<array>".into());
     file.includes.push("<limits>".into());
-    file.includes.push("<cstdlib>".into()); // TODO: ideally only include this if needed (by to_float)
-    file.includes.push("<cmath>".into()); // TODO: ideally only include this if needed (by floor/ceil/round)
     file.includes.push("<slint.h>".into());
 
     for (path, er) in doc.root_component.embedded_file_resources.borrow().iter() {
@@ -533,14 +569,14 @@ pub fn generate(doc: &Document) -> impl std::fmt::Display {
                 let data = data.iter().map(ToString::to_string).join(", ");
                 let data_name = format!("slint_embedded_resource_{}_data", er.id);
                 file.declarations.push(Declaration::Var(Var {
-                    ty: "inline uint8_t".into(),
+                    ty: "inline const uint8_t".into(),
                     name: data_name.clone(),
                     array_size: Some(count),
                     init: Some(format!("{{ {data} }}")),
                 }));
                 let texture_name = format!("slint_embedded_resource_{}_texture", er.id);
                 file.declarations.push(Declaration::Var(Var {
-                    ty: "inline slint::cbindgen_private::types::StaticTexture".into(),
+                    ty: "inline const slint::cbindgen_private::types::StaticTexture".into(),
                     name: texture_name.clone(),
                     array_size: None,
                     init: Some(format!(
@@ -559,28 +595,139 @@ pub fn generate(doc: &Document) -> impl std::fmt::Display {
                         .textures = slint::cbindgen_private::Slice<slint::cbindgen_private::types::StaticTexture>{{ &{texture_name}, 1 }}
                     }}");
                 file.declarations.push(Declaration::Var(Var {
-                    ty: "inline slint::cbindgen_private::types::StaticTextures".into(),
+                    ty: "inline const slint::cbindgen_private::types::StaticTextures".into(),
                     name: format!("slint_embedded_resource_{}", er.id),
                     array_size: None,
                     init: Some(init),
                 }))
             }
             #[cfg(feature = "software-renderer")]
-            crate::embedded_resources::EmbeddedResourcesKind::BitmapFontData(_) => {
-                // FIXME! TODO
+            crate::embedded_resources::EmbeddedResourcesKind::BitmapFontData(
+                crate::embedded_resources::BitmapFont {
+                    family_name,
+                    character_map,
+                    units_per_em,
+                    ascent,
+                    descent,
+                    glyphs,
+                    weight,
+                    italic,
+                },
+            ) => {
+                let family_name_var = format!("slint_embedded_resource_{}_family_name", er.id);
+                let family_name_size = family_name.len();
                 file.declarations.push(Declaration::Var(Var {
-                    ty: "inline int".into(),
+                    ty: "inline const uint8_t".into(),
+                    name: family_name_var.clone(),
+                    array_size: Some(family_name_size),
+                    init: Some(format!(
+                        "{{ {} }}",
+                        family_name.as_bytes().iter().map(ToString::to_string).join(", ")
+                    )),
+                }));
+
+                let charmap_var = format!("slint_embedded_resource_{}_charmap", er.id);
+                let charmap_size = character_map.len();
+                file.declarations.push(Declaration::Var(Var {
+                    ty: "inline const slint::cbindgen_private::CharacterMapEntry".into(),
+                    name: charmap_var.clone(),
+                    array_size: Some(charmap_size),
+                    init: Some(format!(
+                        "{{ {} }}",
+                        character_map
+                            .iter()
+                            .map(|entry| format!(
+                                "{{ .code_point = {}, .glyph_index = {} }}",
+                                entry.code_point as u32, entry.glyph_index
+                            ))
+                            .join(", ")
+                    )),
+                }));
+
+                for (glyphset_index, glyphset) in glyphs.iter().enumerate() {
+                    for (glyph_index, glyph) in glyphset.glyph_data.iter().enumerate() {
+                        file.declarations.push(Declaration::Var(Var {
+                            ty: "inline const uint8_t".into(),
+                            name: format!(
+                                "slint_embedded_resource_{}_gs_{}_gd_{}",
+                                er.id, glyphset_index, glyph_index
+                            ),
+                            array_size: Some(glyph.data.len()),
+                            init: Some(format!(
+                                "{{ {} }}",
+                                glyph.data.iter().map(ToString::to_string).join(", ")
+                            )),
+                        }));
+                    }
+
+                    file.declarations.push(Declaration::Var(Var{
+                        ty: "inline const slint::cbindgen_private::BitmapGlyph".into(),
+                        name: format!("slint_embedded_resource_{}_glyphset_{}", er.id, glyphset_index),
+                        array_size: Some(glyphset.glyph_data.len()),
+                        init: Some(format!("{{ {} }}", glyphset.glyph_data.iter().enumerate().map(|(glyph_index, glyph)| {
+                            format!("{{ .x = {}, .y = {}, .width = {}, .height = {}, .x_advance = {}, .data = slint::cbindgen_private::Slice<uint8_t>{{ {}, {} }} }}",
+                            glyph.x, glyph.y, glyph.width, glyph.height, glyph.x_advance,
+                            format!("slint_embedded_resource_{}_gs_{}_gd_{}", er.id, glyphset_index, glyph_index),
+                            glyph.data.len()
+                        )
+                        }).join(", \n"))),
+                    }));
+                }
+
+                let glyphsets_var = format!("slint_embedded_resource_{}_glyphsets", er.id);
+                let glyphsets_size = glyphs.len();
+                file.declarations.push(Declaration::Var(Var {
+                    ty: "inline const slint::cbindgen_private::BitmapGlyphs".into(),
+                    name: glyphsets_var.clone(),
+                    array_size: Some(glyphsets_size),
+                    init: Some(format!(
+                        "{{ {} }}",
+                        glyphs
+                            .iter()
+                            .enumerate()
+                            .map(|(glyphset_index, glyphset)| format!(
+                                "{{ .pixel_size = {}, .glyph_data = slint::cbindgen_private::Slice<slint::cbindgen_private::BitmapGlyph>{{
+                                    {}, {}
+                                }}
+                                 }}",
+                                glyphset.pixel_size, format!("slint_embedded_resource_{}_glyphset_{}", er.id, glyphset_index), glyphset.glyph_data.len()
+                            ))
+                            .join(", \n")
+                    )),
+                }));
+
+                let init = format!(
+                    "slint::cbindgen_private::BitmapFont {{
+                        .family_name = slint::cbindgen_private::Slice<uint8_t>{{ {family_name_var} , {family_name_size} }},
+                        .character_map = slint::cbindgen_private::Slice<slint::cbindgen_private::CharacterMapEntry>{{ {charmap_var}, {charmap_size} }},
+                        .units_per_em = {units_per_em},
+                        .ascent = {ascent},
+                        .descent = {descent},
+                        .glyphs = slint::cbindgen_private::Slice<slint::cbindgen_private::BitmapGlyphs>{{ {glyphsets_var}, {glyphsets_size} }},
+                        .weight = {weight},
+                        .italic = {italic},
+                }}"
+                );
+
+                file.declarations.push(Declaration::Var(Var {
+                    ty: "inline const slint::cbindgen_private::BitmapFont".into(),
                     name: format!("slint_embedded_resource_{}", er.id),
                     array_size: None,
-                    init: Some("0".into()),
+                    init: Some(init),
                 }))
             }
         }
     }
 
-    for ty in doc.root_component.used_types.borrow().structs.iter() {
-        if let Type::Struct { fields, name: Some(name), node: Some(node) } = ty {
-            generate_struct(&mut file, name, fields, node);
+    for ty in doc.root_component.used_types.borrow().structs_and_enums.iter() {
+        match ty {
+            Type::Struct { fields, name: Some(name), node: Some(node), .. } => {
+                generate_struct(&mut file, name, fields, node);
+            }
+            Type::Enumeration(en) => {
+                generate_enum(&mut file, en);
+            }
+            _ => (),
         }
     }
 
@@ -600,6 +747,8 @@ pub fn generate(doc: &Document) -> impl std::fmt::Display {
         ..Default::default()
     }));
 
+    let conditional_includes = ConditionalIncludes::default();
+
     for sub_compo in &llr.sub_components {
         let sub_compo_id = ident(&sub_compo.name);
         let mut sub_compo_struct = Struct { name: sub_compo_id.clone(), ..Default::default() };
@@ -610,30 +759,41 @@ pub fn generate(doc: &Document) -> impl std::fmt::Display {
             None,
             Access::Public,
             &mut file,
+            &conditional_includes,
         );
         file.definitions.extend(sub_compo_struct.extract_definitions().collect::<Vec<_>>());
         file.declarations.push(Declaration::Struct(sub_compo_struct));
     }
 
     for glob in llr.globals.iter().filter(|glob| !glob.is_builtin) {
-        generate_global(&mut file, glob, &llr);
+        generate_global(&mut file, &conditional_includes, glob, &llr);
         file.definitions.extend(glob.aliases.iter().map(|name| {
             Declaration::TypeAlias(TypeAlias { old_name: ident(&glob.name), new_name: ident(name) })
         }))
     }
 
-    generate_public_component(&mut file, &llr);
+    generate_public_component(&mut file, &conditional_includes, &llr);
 
-    file.definitions.push(Declaration::Var(Var{
-        ty: format!(
-            "[[maybe_unused]] constexpr slint::private_api::VersionCheckHelper<{}, {}, {}>",
-            env!("CARGO_PKG_VERSION_MAJOR"),
-            env!("CARGO_PKG_VERSION_MINOR"),
-            env!("CARGO_PKG_VERSION_PATCH")),
-        name: "THE_SAME_VERSION_MUST_BE_USED_FOR_THE_COMPILER_AND_THE_RUNTIME".into(),
-        init: Some("slint::private_api::VersionCheckHelper<SLINT_VERSION_MAJOR, SLINT_VERSION_MINOR, SLINT_VERSION_PATCH>()".into()),
-        ..Default::default()
-    }));
+    file.after_includes = format!(
+        "static_assert({x} == SLINT_VERSION_MAJOR && {y} == SLINT_VERSION_MINOR && {z} == SLINT_VERSION_PATCH, \
+        \"This file was generated with Slint compiler version {x}.{y}.{z}, but the Slint library used is \" \
+        SLINT_VERSION_STRING \". The version numbers must match exactly.\");",
+        x = env!("CARGO_PKG_VERSION_MAJOR"),
+        y = env!("CARGO_PKG_VERSION_MINOR"),
+        z = env!("CARGO_PKG_VERSION_PATCH")
+    );
+
+    if conditional_includes.iostream.get() {
+        file.includes.push("<iostream>".into());
+    }
+
+    if conditional_includes.cstdlib.get() {
+        file.includes.push("<cstdlib>".into());
+    }
+
+    if conditional_includes.cmath.get() {
+        file.includes.push("<cmath>".into());
+    }
 
     file
 }
@@ -677,10 +837,25 @@ fn generate_struct(
     }))
 }
 
+fn generate_enum(file: &mut File, en: &std::rc::Rc<Enumeration>) {
+    file.declarations.push(Declaration::Enum(Enum {
+        name: ident(&en.name),
+        values: (0..en.values.len())
+            .map(|value| {
+                ident(&EnumerationValue { value, enumeration: en.clone() }.to_pascal_case())
+            })
+            .collect(),
+    }))
+}
+
 /// Generate the component in `file`.
 ///
 /// `sub_components`, if Some, will be filled with all the sub component which needs to be added as friends
-fn generate_public_component(file: &mut File, component: &llr::PublicComponent) {
+fn generate_public_component(
+    file: &mut File,
+    conditional_includes: &ConditionalIncludes,
+    component: &llr::PublicComponent,
+) {
     let root_component = &component.item_tree.root;
     let component_id = ident(&root_component.name);
     let mut component_struct = Struct { name: component_id.clone(), ..Default::default() };
@@ -690,9 +865,8 @@ fn generate_public_component(file: &mut File, component: &llr::PublicComponent) 
         // FIXME: many of the different component bindings need to access this
         Access::Public,
         Declaration::Var(Var {
-            ty: "slint::Window".into(),
+            ty: "std::optional<slint::Window>".into(),
             name: "m_window".into(),
-            init: Some("slint::Window{slint::private_api::WindowAdapterRc()}".into()),
             ..Default::default()
         }),
     ));
@@ -701,7 +875,10 @@ fn generate_public_component(file: &mut File, component: &llr::PublicComponent) 
         public_component: component,
         current_sub_component: Some(&component.item_tree.root),
         current_global: None,
-        generator_state: "this".to_string(),
+        generator_state: CppGeneratorContext {
+            root_access: "this".to_string(),
+            conditional_includes,
+        },
         parent: None,
         argument_types: &[],
     };
@@ -716,6 +893,7 @@ fn generate_public_component(file: &mut File, component: &llr::PublicComponent) 
         component_id,
         Access::Private, // Hide properties and other fields from the C++ API
         file,
+        conditional_includes,
     );
 
     // Give generated sub-components, etc. access to our fields
@@ -738,7 +916,7 @@ fn generate_public_component(file: &mut File, component: &llr::PublicComponent) 
         Declaration::Function(Function {
             name: "show".into(),
             signature: "()".into(),
-            statements: Some(vec!["m_window.show();".into()]),
+            statements: Some(vec!["window().show();".into()]),
             ..Default::default()
         }),
     ));
@@ -748,7 +926,7 @@ fn generate_public_component(file: &mut File, component: &llr::PublicComponent) 
         Declaration::Function(Function {
             name: "hide".into(),
             signature: "()".into(),
-            statements: Some(vec!["m_window.hide();".into()]),
+            statements: Some(vec!["window().hide();".into()]),
             ..Default::default()
         }),
     ));
@@ -758,10 +936,15 @@ fn generate_public_component(file: &mut File, component: &llr::PublicComponent) 
         Declaration::Function(Function {
             name: "window".into(),
             signature: "() const -> slint::Window&".into(),
-            statements: Some(vec![format!(
-                "return const_cast<{} *>(this)->m_window;",
-                component_struct.name
-            )]),
+            statements: Some(vec![
+                format!("auto self = const_cast<{} *>(this);", component_struct.name),
+                "if (!m_window.has_value()) {".into(),
+                "   auto &window = self->m_window.emplace(slint::private_api::WindowAdapterRc());"
+                    .into(),
+                "   window.window_handle().set_component(*self);".into(),
+                "}".into(),
+                "return *self->m_window;".into(),
+            ]),
             ..Default::default()
         }),
     ));
@@ -857,6 +1040,7 @@ fn generate_item_tree(
     item_tree_class_name: String,
     field_access: Access,
     file: &mut File,
+    conditional_includes: &ConditionalIncludes,
 ) {
     target_struct.friends.push(format!(
         "vtable::VRc<slint::private_api::ComponentVTable, {}>",
@@ -867,9 +1051,10 @@ fn generate_item_tree(
         target_struct,
         &sub_tree.root,
         root,
-        parent_ctx.clone(),
+        parent_ctx,
         field_access,
         file,
+        conditional_includes,
     );
 
     let root_access = if parent_ctx.is_some() { "parent->root" } else { "self" };
@@ -1047,6 +1232,17 @@ fn generate_item_tree(
         }),
     ));
 
+    target_struct.members.push((
+        Access::Private,
+        Declaration::Function(Function {
+            name: "embed_component".into(),
+            signature: "([[maybe_unused]] slint::private_api::ComponentRef component, [[maybe_unused]] const slint::private_api::ComponentWeak *parent_component, [[maybe_unused]] const uintptr_t parent_index) -> bool".into(),
+            is_static: true,
+            statements: Some(vec!["return false; /* todo! */".into()]),
+            ..Default::default()
+        }),
+    ));
+
     // Statements will be overridden for repeated components!
     target_struct.members.push((
         Access::Private,
@@ -1141,6 +1337,21 @@ fn generate_item_tree(
     ));
 
     target_struct.members.push((
+        Access::Private,
+        Declaration::Function(Function {
+            name: "window_adapter".into(),
+            signature:
+                "([[maybe_unused]] slint::private_api::ComponentRef component, [[maybe_unused]] bool do_create, [[maybe_unused]] slint::cbindgen_private::Option<slint::private_api::WindowAdapterRc>* result) -> void"
+                    .into(),
+            is_static: true,
+            statements: Some(vec![format!(
+                "/* TODO: implement this! */",
+            )]),
+            ..Default::default()
+        }),
+    ));
+
+    target_struct.members.push((
         Access::Public,
         Declaration::Var(Var {
             ty: "static const slint::private_api::ComponentVTable".to_owned(),
@@ -1154,8 +1365,8 @@ fn generate_item_tree(
         name: format!("{}::static_vtable", item_tree_class_name),
         init: Some(format!(
             "{{ visit_children, get_item_ref, get_subtree_range, get_subtree_component, \
-                get_item_tree, parent_node, subtree_index, layout_info, \
-                accessible_role, accessible_string_property, \
+                get_item_tree, parent_node, embed_component, subtree_index, layout_info, \
+                accessible_role, accessible_string_property, window_adapter, \
                 slint::private_api::drop_in_place<{}>, slint::private_api::dealloc }}",
             item_tree_class_name
         )),
@@ -1183,16 +1394,12 @@ fn generate_item_tree(
     ];
 
     if parent_ctx.is_none() {
-        create_code.extend([format!(
-            "{}->m_window.window_handle().set_component(*self_rc);",
-            root_access
-        )]);
+        create_code.push("slint::cbindgen_private::slint_ensure_backend();".into());
     }
 
     create_code.extend([
         format!(
-            "{}->m_window.window_handle().register_component(self, self->item_array());",
-            root_access
+            "slint::private_api::register_component(&self_rc.into_dyn(), {root_access}->m_window);",
         ),
         format!("self->init({}, self->self_weak, 0, 1 {});", root_access, init_parent_parameters),
     ]);
@@ -1200,7 +1407,7 @@ fn generate_item_tree(
     // Repeaters run their user_init() code from Repeater::ensure_updated() after update() initialized model_data/index.
     // So always call user_init(), unless this component is a repeated.
     if parent_ctx.map_or(true, |parent_ctx| parent_ctx.repeater_index.is_none()) {
-        create_code.push(format!("self->user_init();"));
+        create_code.push("self->user_init();".to_string());
     }
 
     create_code
@@ -1224,7 +1431,7 @@ fn generate_item_tree(
     let mut destructor = vec!["auto self = this;".to_owned()];
 
     destructor.push(format!(
-        "{}->m_window.window_handle().unregister_component(self, item_array());",
+        "if (auto &window = {}->m_window) window->window_handle().unregister_component(self, item_array());",
         root_access
     ));
 
@@ -1247,6 +1454,7 @@ fn generate_sub_component(
     parent_ctx: Option<ParentCtx>,
     field_access: Access,
     file: &mut File,
+    conditional_includes: &ConditionalIncludes,
 ) {
     let root_ptr_type = format!("const {} *", ident(&root.item_tree.root.name));
 
@@ -1314,8 +1522,8 @@ fn generate_sub_component(
     let ctx = EvaluationContext::new_sub_component(
         root,
         component,
-        "self->root".into(),
-        parent_ctx.clone(),
+        CppGeneratorContext { root_access: "self->root".into(), conditional_includes },
+        parent_ctx,
     );
 
     component.popup_windows.iter().for_each(|c| {
@@ -1329,6 +1537,7 @@ fn generate_sub_component(
             component_id,
             Access::Public,
             file,
+            conditional_includes,
         );
         file.definitions.extend(popup_struct.extract_definitions().collect::<Vec<_>>());
         file.declarations.push(Declaration::Struct(popup_struct));
@@ -1472,6 +1681,7 @@ fn generate_sub_component(
             ParentCtx::new(&ctx, Some(idx)),
             &data_type,
             file,
+            conditional_includes,
         );
 
         let repeater_id = format!("repeater_{}", idx);
@@ -1669,7 +1879,7 @@ fn generate_sub_component(
             field_access,
             Declaration::Function(Function {
                 name: "visit_dynamic_children".into(),
-                signature: "(intptr_t dyn_index, [[maybe_unused]] slint::private_api::TraversalOrder order, [[maybe_unused]] slint::private_api::ItemVisitorRefMut visitor) const -> uint64_t".into(),
+                signature: "(uintptr_t dyn_index, [[maybe_unused]] slint::private_api::TraversalOrder order, [[maybe_unused]] slint::private_api::ItemVisitorRefMut visitor) const -> uint64_t".into(),
                 statements: Some(vec![
                     "    auto self = this;".to_owned(),
                     format!("    switch(dyn_index) {{ {} }};", children_visitor_cases.join("")),
@@ -1713,6 +1923,7 @@ fn generate_repeated_component(
     parent_ctx: ParentCtx,
     model_data_type: &Type,
     file: &mut File,
+    conditional_includes: &ConditionalIncludes,
 ) {
     let repeater_id = ident(&repeated.sub_tree.root.name);
     let mut repeater_struct = Struct { name: repeater_id.clone(), ..Default::default() };
@@ -1720,17 +1931,18 @@ fn generate_repeated_component(
         &mut repeater_struct,
         &repeated.sub_tree,
         root,
-        Some(parent_ctx.clone()),
+        Some(parent_ctx),
         repeater_id.clone(),
         Access::Public,
         file,
+        conditional_includes,
     );
 
     let ctx = EvaluationContext {
         public_component: root,
         current_sub_component: Some(&repeated.sub_tree.root),
         current_global: None,
-        generator_state: "self".into(),
+        generator_state: CppGeneratorContext { root_access: "self".into(), conditional_includes },
         parent: Some(parent_ctx),
         argument_types: &[],
     };
@@ -1832,7 +2044,12 @@ fn generate_repeated_component(
     file.declarations.push(Declaration::Struct(repeater_struct));
 }
 
-fn generate_global(file: &mut File, global: &llr::GlobalComponent, root: &llr::PublicComponent) {
+fn generate_global(
+    file: &mut File,
+    conditional_includes: &ConditionalIncludes,
+    global: &llr::GlobalComponent,
+    root: &llr::PublicComponent,
+) {
     let mut global_struct = Struct { name: ident(&global.name), ..Default::default() };
 
     for property in global.properties.iter().filter(|p| p.use_count.get() > 0) {
@@ -1857,8 +2074,11 @@ fn generate_global(file: &mut File, global: &llr::GlobalComponent, root: &llr::P
     }
 
     let mut init = vec!["(void)this->root;".into()];
-
-    let ctx = EvaluationContext::new_global(root, global, "this->root".into());
+    let ctx = EvaluationContext::new_global(
+        root,
+        global,
+        CppGeneratorContext { root_access: "this->root".into(), conditional_includes },
+    );
 
     for (property_index, expression) in global.init_values.iter().enumerate() {
         if global.properties[property_index].use_count.get() == 0 {
@@ -1908,7 +2128,7 @@ fn generate_global(file: &mut File, global: &llr::GlobalComponent, root: &llr::P
 
 fn generate_functions<'a>(
     functions: &'a [llr::Function],
-    ctx: &'a EvaluationContext,
+    ctx: &'a EvaluationContext<'_>,
 ) -> impl Iterator<Item = Declaration> + 'a {
     functions.iter().map(|f| {
         let mut ctx2 = ctx.clone();
@@ -2116,7 +2336,7 @@ fn follow_sub_component_path<'a>(
 }
 
 fn access_window_field(ctx: &EvaluationContext) -> String {
-    let root = &ctx.generator_state;
+    let root = &ctx.generator_state.root_access;
     format!("{}->window().window_handle()", root)
 }
 
@@ -2151,7 +2371,7 @@ fn access_member(reference: &llr::PropertyReference, ctx: &EvaluationContext) ->
             let property_name = ident(prop_name);
             let flick = sub_component.items[item_index]
                 .is_flickable_viewport
-                .then(|| "viewport.")
+                .then_some("viewport.")
                 .unwrap_or_default();
             format!("{}->{}{}.{}{}", path, compo_path, item_name, flick, property_name)
         }
@@ -2221,7 +2441,7 @@ fn access_member(reference: &llr::PropertyReference, ctx: &EvaluationContext) ->
             }
         }
         llr::PropertyReference::Global { global_index, property_index } => {
-            let root_access = &ctx.generator_state;
+            let root_access = &ctx.generator_state.root_access;
             let global = &ctx.public_component.globals[*global_index];
             let global_id = format!("global_{}", ident(&global.name));
             let property_name = ident(
@@ -2230,7 +2450,7 @@ fn access_member(reference: &llr::PropertyReference, ctx: &EvaluationContext) ->
             format!("{}->{}->{}", root_access, global_id, property_name)
         }
         llr::PropertyReference::GlobalFunction { global_index, function_index } => {
-            let root_access = &ctx.generator_state;
+            let root_access = &ctx.generator_state.root_access;
             let global = &ctx.public_component.globals[*global_index];
             let global_id = format!("global_{}", ident(&global.name));
             let name =
@@ -2285,7 +2505,7 @@ fn compile_expression(expr: &llr::Expression, ctx: &EvaluationContext) -> String
             format!(r#"{}.get()"#, access)
         }
         Expression::BuiltinFunctionCall { function, arguments } => {
-            compile_builtin_function_call(*function, arguments, ctx)
+            compile_builtin_function_call(function.clone(), arguments, ctx)
         }
         Expression::CallBackCall{ callback, arguments } => {
             let f = access_member(callback, ctx);
@@ -2327,7 +2547,7 @@ fn compile_expression(expr: &llr::Expression, ctx: &EvaluationContext) -> String
             )
         },
         Expression::Cast { from, to } => {
-            let f = compile_expression(&*from, ctx);
+            let f = compile_expression(from, ctx);
             match (from.ty(ctx), to) {
                 (from, Type::String) if from.as_unit_product().is_some() => {
                     format!("slint::SharedString::from_number({})", f)
@@ -2440,7 +2660,7 @@ fn compile_expression(expr: &llr::Expression, ctx: &EvaluationContext) -> String
             let mut ctx2 = ctx;
             let mut repeater_index = None;
             for _ in 0..=*level {
-                let x = ctx2.parent.clone().unwrap();
+                let x = ctx2.parent.unwrap();
                 ctx2 = x.ctx;
                 repeater_index = x.repeater_index;
                 write!(path, "->parent").unwrap();
@@ -2474,8 +2694,8 @@ fn compile_expression(expr: &llr::Expression, ctx: &EvaluationContext) -> String
             let mut buffer = [0; 3];
             format!(
                 "({lhs} {op} {rhs})",
-                lhs = compile_expression(&*lhs, ctx),
-                rhs = compile_expression(&*rhs, ctx),
+                lhs = compile_expression(lhs, ctx),
+                rhs = compile_expression(rhs, ctx),
                 op = match op {
                     '=' => "==",
                     '!' => "!=",
@@ -2489,7 +2709,7 @@ fn compile_expression(expr: &llr::Expression, ctx: &EvaluationContext) -> String
             )
         }
         Expression::UnaryOp { sub, op } => {
-            format!("({op} {sub})", sub = compile_expression(&*sub, ctx), op = op,)
+            format!("({op} {sub})", sub = compile_expression(sub, ctx), op = op,)
         }
         Expression::ImageReference { resource_ref, .. }  => {
             match resource_ref {
@@ -2587,8 +2807,9 @@ fn compile_expression(expr: &llr::Expression, ctx: &EvaluationContext) -> String
             )
         }
         Expression::EnumerationValue(value) => {
+            let prefix = if value.enumeration.node.is_some() { "" } else {"slint::cbindgen_private::"};
             format!(
-                "slint::cbindgen_private::{}::{}",
+                "{prefix}{}::{}",
                 value.enumeration.name,
                 ident(&value.to_pascal_case()),
             )
@@ -2638,6 +2859,21 @@ fn compile_expression(expr: &llr::Expression, ctx: &EvaluationContext) -> String
                 )
 
         }
+        Expression::MinMax { ty, op, lhs, rhs } => {
+            let ident = match op {
+                MinMaxOp::Min => "min",
+                MinMaxOp::Max => "max",
+            };
+            let lhs_code = compile_expression(lhs, ctx);
+            let rhs_code = compile_expression(rhs, ctx);
+            format!(
+                r#"std::{ident}<{ty}>({lhs_code}, {rhs_code})"#,
+                ty = ty.cpp_type().unwrap_or_default(),
+                ident = ident,
+                lhs_code = lhs_code,
+                rhs_code = rhs_code
+            )
+        }
     }
 }
 
@@ -2656,30 +2892,72 @@ fn compile_builtin_function_call(
         }
         BuiltinFunction::GetWindowDefaultFontSize => {
             let window_item_name = ident(&ctx.public_component.item_tree.root.items[0].name);
-            format!("{}->{}.default_font_size.get()", ctx.generator_state, window_item_name)
+            format!(
+                "{}->{}.default_font_size.get()",
+                ctx.generator_state.root_access, window_item_name
+            )
         }
         BuiltinFunction::AnimationTick => "slint::cbindgen_private::slint_animation_tick()".into(),
         BuiltinFunction::Debug => {
+            ctx.generator_state.conditional_includes.iostream.set(true);
             format!("std::cout << {} << std::endl;", a.join("<<"))
         }
-        BuiltinFunction::Mod => format!("std::fmod({}, {})", a.next().unwrap(), a.next().unwrap()),
-        BuiltinFunction::Round => format!("std::round({})", a.next().unwrap()),
-        BuiltinFunction::Ceil => format!("std::ceil({})", a.next().unwrap()),
-        BuiltinFunction::Floor => format!("std::floor({})", a.next().unwrap()),
-        BuiltinFunction::Sqrt => format!("std::sqrt({})", a.next().unwrap()),
-        BuiltinFunction::Abs => format!("std::abs({})", a.next().unwrap()),
+        BuiltinFunction::Mod => {
+            ctx.generator_state.conditional_includes.cmath.set(true);
+            format!("std::fmod({}, {})", a.next().unwrap(), a.next().unwrap())
+        }
+        BuiltinFunction::Round => {
+            ctx.generator_state.conditional_includes.cmath.set(true);
+            format!("std::round({})", a.next().unwrap())
+        }
+        BuiltinFunction::Ceil => {
+            ctx.generator_state.conditional_includes.cmath.set(true);
+            format!("std::ceil({})", a.next().unwrap())
+        }
+        BuiltinFunction::Floor => {
+            ctx.generator_state.conditional_includes.cmath.set(true);
+            format!("std::floor({})", a.next().unwrap())
+        }
+        BuiltinFunction::Sqrt => {
+            ctx.generator_state.conditional_includes.cmath.set(true);
+            format!("std::sqrt({})", a.next().unwrap())
+        }
+        BuiltinFunction::Abs => {
+            ctx.generator_state.conditional_includes.cmath.set(true);
+            format!("std::abs({})", a.next().unwrap())
+        }
         BuiltinFunction::Log => {
+            ctx.generator_state.conditional_includes.cmath.set(true);
             format!("std::log({}) / std::log({})", a.next().unwrap(), a.next().unwrap())
         }
         BuiltinFunction::Pow => {
+            ctx.generator_state.conditional_includes.cmath.set(true);
             format!("std::pow(({}), ({}))", a.next().unwrap(), a.next().unwrap())
         }
-        BuiltinFunction::Sin => format!("std::sin(({}) * {})", a.next().unwrap(), pi_180),
-        BuiltinFunction::Cos => format!("std::cos(({}) * {})", a.next().unwrap(), pi_180),
-        BuiltinFunction::Tan => format!("std::tan(({}) * {})", a.next().unwrap(), pi_180),
-        BuiltinFunction::ASin => format!("std::asin({}) / {}", a.next().unwrap(), pi_180),
-        BuiltinFunction::ACos => format!("std::acos({}) / {}", a.next().unwrap(), pi_180),
-        BuiltinFunction::ATan => format!("std::atan({}) / {}", a.next().unwrap(), pi_180),
+        BuiltinFunction::Sin => {
+            ctx.generator_state.conditional_includes.cmath.set(true);
+            format!("std::sin(({}) * {})", a.next().unwrap(), pi_180)
+        }
+        BuiltinFunction::Cos => {
+            ctx.generator_state.conditional_includes.cmath.set(true);
+            format!("std::cos(({}) * {})", a.next().unwrap(), pi_180)
+        }
+        BuiltinFunction::Tan => {
+            ctx.generator_state.conditional_includes.cmath.set(true);
+            format!("std::tan(({}) * {})", a.next().unwrap(), pi_180)
+        }
+        BuiltinFunction::ASin => {
+            ctx.generator_state.conditional_includes.cmath.set(true);
+            format!("std::asin({}) / {}", a.next().unwrap(), pi_180)
+        }
+        BuiltinFunction::ACos => {
+            ctx.generator_state.conditional_includes.cmath.set(true);
+            format!("std::acos({}) / {}", a.next().unwrap(), pi_180)
+        }
+        BuiltinFunction::ATan => {
+            ctx.generator_state.conditional_includes.cmath.set(true);
+            format!("std::atan({}) / {}", a.next().unwrap(), pi_180)
+        }
         BuiltinFunction::SetFocusItem => {
             if let [llr::Expression::PropertyReference(pr)] = arguments {
                 let window = access_window_field(ctx);
@@ -2699,9 +2977,11 @@ fn compile_builtin_function_call(
                 .into()
         }*/
         BuiltinFunction::StringIsFloat => {
+            ctx.generator_state.conditional_includes.cstdlib.set(true);
             format!("[](const auto &a){{ auto e1 = std::end(a); auto e2 = const_cast<char*>(e1); std::strtod(std::begin(a), &e2); return e1 == e2; }}({})", a.next().unwrap())
         }
         BuiltinFunction::StringToFloat => {
+            ctx.generator_state.conditional_includes.cstdlib.set(true);
             format!("[](const auto &a){{ auto e1 = std::end(a); auto e2 = const_cast<char*>(e1); auto r = std::strtod(std::begin(a), &e2); return e1 == e2 ? r : 0; }}({})", a.next().unwrap())
         }
         BuiltinFunction::ColorBrighter => {
@@ -2709,6 +2989,15 @@ fn compile_builtin_function_call(
         }
         BuiltinFunction::ColorDarker => {
             format!("{}.darker({})", a.next().unwrap(), a.next().unwrap())
+        }
+        BuiltinFunction::ColorTransparentize => {
+            format!("{}.transparentize({})", a.next().unwrap(), a.next().unwrap())
+        }
+        BuiltinFunction::ColorMix => {
+            format!("{}.mix({}, {})", a.next().unwrap(), a.next().unwrap(), a.next().unwrap())
+        }
+        BuiltinFunction::ColorWithAlpha => {
+            format!("{}.with_alpha({})", a.next().unwrap(), a.next().unwrap())
         }
         BuiltinFunction::ImageSize => {
             format!("{}.size()", a.next().unwrap())
@@ -2735,7 +3024,7 @@ fn compile_builtin_function_call(
             format!("{}.text_input_focused()", access_window_field(ctx))
         }
         BuiltinFunction::ShowPopupWindow => {
-            if let [llr::Expression::NumberLiteral(popup_index), x, y, llr::Expression::PropertyReference(parent_ref)] =
+            if let [llr::Expression::NumberLiteral(popup_index), x, y, close_on_click, llr::Expression::PropertyReference(parent_ref)] =
                 arguments
             {
                 let mut parent_ctx = ctx;
@@ -2755,11 +3044,42 @@ fn compile_builtin_function_call(
                 let parent_component = access_item_rc(parent_ref, ctx);
                 let x = compile_expression(x, ctx);
                 let y = compile_expression(y, ctx);
+                let close_on_click = compile_expression(close_on_click, ctx);
                 format!(
-                    "{window}.show_popup<{popup_window_id}>({component_access}, {{ static_cast<float>({x}), static_cast<float>({y}) }}, {{ {parent_component} }})"
+                    "{window}.show_popup<{popup_window_id}>({component_access}, {{ static_cast<float>({x}), static_cast<float>({y}) }}, {close_on_click}, {{ {parent_component} }})"
                 )
             } else {
                 panic!("internal error: invalid args to ShowPopupWindow {:?}", arguments)
+            }
+        }
+        BuiltinFunction::ClosePopupWindow => {
+            let window = access_window_field(ctx);
+            format!("{window}.close_popup()")
+        }
+        BuiltinFunction::ItemMemberFunction(name) => {
+            if let [llr::Expression::PropertyReference(pr)] = arguments {
+                let item = access_member(pr, ctx);
+                let item_rc = access_item_rc(pr, ctx);
+                let window = access_window_field(ctx);
+                let native = native_item(pr, ctx);
+
+                let function_name = format!(
+                    "slint_{}_{}",
+                    native.class_name.to_lowercase(),
+                    ident(&name).to_lowercase()
+                );
+
+                format!("{function_name}(&{item}, &{window}.handle(), &{item_rc})")
+            } else {
+                panic!("internal error: invalid args to ItemMemberFunction {:?}", arguments)
+            }
+        }
+        BuiltinFunction::ItemAbsolutePosition => {
+            if let [llr::Expression::PropertyReference(pr)] = arguments {
+                let item_rc = access_item_rc(pr, ctx);
+                format!("slint::LogicalPosition(slint::cbindgen_private::slint_item_absolute_position(&{item_rc}))")
+            } else {
+                panic!("internal error: invalid args to ItemAbsolutePosition {:?}", arguments)
             }
         }
         BuiltinFunction::RegisterCustomFontByPath => {
@@ -2783,8 +3103,14 @@ fn compile_builtin_function_call(
             }
         }
         BuiltinFunction::RegisterBitmapFont => {
-            // TODO
-            "/*TODO: REGISTER FONT*/".into()
+            if let [llr::Expression::NumberLiteral(resource_id)] = &arguments {
+                let window = access_window_field(ctx);
+                let resource_id: usize = *resource_id as _;
+                let symbol = format!("slint_embedded_resource_{}", resource_id);
+                format!("{window}.register_bitmap_font({symbol});")
+            } else {
+                panic!("internal error: invalid args to RegisterBitmapFont {:?}", arguments)
+            }
         }
         BuiltinFunction::ImplicitLayoutInfo(orient) => {
             if let [llr::Expression::PropertyReference(pr)] = arguments {
@@ -2801,6 +3127,9 @@ fn compile_builtin_function_call(
                 panic!("internal error: invalid args to ImplicitLayoutInfo {:?}", arguments)
             }
         }
+        BuiltinFunction::Translate => {
+            format!("slint::private_api::translate({})", a.join(","))
+        }
     }
 }
 
@@ -2810,7 +3139,7 @@ fn box_layout_function(
     elements: &[Either<llr::Expression, usize>],
     orientation: Orientation,
     sub_expression: &llr::Expression,
-    ctx: &llr_EvaluationContext<String>,
+    ctx: &llr_EvaluationContext<CppGeneratorContext>,
 ) -> String {
     let repeated_indices = repeated_indices.map(ident);
     let mut push_code =

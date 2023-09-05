@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: MIT
 
 use crate::ui::*;
 use chrono::prelude::*;
@@ -144,7 +144,6 @@ fn display_forecast(window_weak: Weak<MainWindow>, forecast: Vec<(ForecastDay, S
                     absolute_min: min_temp.round() as i32,
                     unit: SharedString::from("°"),
                     icon: get_icon(&window, &forecast_day.day.condition),
-                    ..Default::default()
                 };
 
                 forecast_model.push(model);

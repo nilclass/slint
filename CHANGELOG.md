@@ -1,29 +1,140 @@
+<!-- Copyright © SixtyFPS GmbH <info@slint.dev> ; SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial -->
+
 # Changelog
 All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## [1.2.0] - 2023-09-04
+
 ### General
 
- - Fixed missing items compilation error in the generated code related to public functions (#2655).
- - Added support for Window transparency on supported platform
- - Fixed TabWidget not filling the parent in non-native style
+ - Fixed accessibility tree on Linux when UI has no repeaters.
+ - Fixed native style animations.
+ - Fixed setting rotation-angle and opacity from a callback.
+ - Fixed touch in the `Flickable` not resulting in a click.
+ - Added support for a new experimental backend that renders fullscreen on Linux using KMS (`backend-linuxkms`).
+ - Calling `show()` on a component (or its window) now keeps the component alive for as long as the window
+   is visible.
 
 ### Slint Language
 
- - Support negative numbers in `cubic-bezier(...)` function.
+ - Improve reporting of diagnostics when there are errors, by attempting to run more passes.
+ - Fixed compiler panic when an unresolved alias has a binding.
+ - Added `edited` callback to `SpinBox`.
+ - Added `row-pointer-event` callback to `StandardTableView`.
+ - Fixed enabled property with `ComboBox` in Fluent Design style.
+ - Fixed duplicated import when importing file relative to the project instead of the current path. Deprecated importing files relative to the project path.
+ - Added `current-item-changed` to `StandardListView`.
+ - Added `current-row-changed` to `StandardTableView`.
+ - Added `item-pointer-event` to `StandardListView`.
+ - Added `orientation` property to `Slider`.
+ - Added experimental `cupertino` style.
+
+### Rust API
+
+ - Implemented `Default` for `slint::Weak`.
+ - Added `ReverseModel` and `ModelExt::reverse`.
+ - Added `fn set_visible(&self, _visible: bool)` to the `slint::platform::WindowAdapter` trait.
+ - Added ways to create a `SoftwareRenderer` without a `MinimalSoftwareWindow`.
+ - The features `renderer-winit-*` were renamed to `renderer-*`.
+ - Added `BorrowedOpenGLTextureBuilder` to configure more aspects of borrowed OpenGL textures.
+
+### C++
+
+ - Added Platform API to write your own platform that drives its own event loop.
+ - Added `SLINT_LIBRARY_CARGO_FLAGS` cmake variable.
+ - Added `ReverseModel`.
+ - Added functions in Window to dispatch pointer events.
+ - The `slint_interpreter.h` file was renamed `slint-interpreter.h`, a deprecated header was added.
+ - The features `SLINT_FEATURE_RENDERER_WINIT_*` were renamed to `SLINT_FEATURE_RENDERER_*`.
+ - Extended `slint::Image::create_from_borrowed_gl_2d_rgba_texture` with an option to configure more aspects
+   of texture rendering.
+ - Fixed cmake dependencies of the generated header so it is generated if and only if the .slint files have changed
+
+### LSP
+
+ - Fixed termination of the lsp process.
+
+## [1.1.1] - 2023-07-10
+
+### General
+
+ - Fixed panic in accesskit at startup on Linux. (#3055)
+ - Fixed compiler panics when some complex expressions are used for the model expression in `for` (#2977)
+ - Native style: Fixed support for floating point ranges in Slider.
+ - Fixed panics in the software renderer related to text rendering.
+
+### Slint Language
+
+- Added `clear-selection()` to `TextInput`, `LineEdit`, and `TextEdit`.
+- The `PointerEvent` struct now has the `modifiers: KeyboardModifiers` field.
+
+### C++
+
+ - Added `slint::Window::scale_factor()` as getter to read the system device pixel ratio.
+
+### LSP
+
+ - Correctly use the CARGO_MANIFEST_DIR as the base for import and image in `slint!` macro
+
+
+## [1.1.0] - 2023-06-26
+
+### General
+
+ - Fixed missing items compilation error in the generated code related to public functions (#2655).
+ - Added support for Window transparency on supported platforms.
+ - Fixed TabWidget not filling the parent in non-native style.
+ - Skia: Add support for rendering with Vulkan.
+ - Wasm: Added copy and paste support.
+ - Fixed TouchArea::has-hover not being reset in some cases involving multiple `TouchArea` or `Flickable` elements.
+ - Fixed ListView panic when model reset in some cases. (#2780)
+ - Fixed read-only `TextInput` reporting input method access. (#2812)
+ - Fixed `LineEdit`'s placeholder text not being rendered with the same font attributes as regular `LineEdit` text.
+ - Fixed rendering of SVGs with text. (#2646)
+ - Software renderer: Show the cursor in TextInput
+
+### Slint Language
+
+ - Added support for declaring enumerations.
+ - Added support negative numbers in `cubic-bezier(...)` function.
+ - Added `ProgressIndicator` widget.
+ - Added `Switch` widget.
+ - Added boolean `font-italic` property to `Text` and `TextInput`.
+ - Added `select-all()`, `cut()`, `copy()`, and `paste()` to `TextInput`, `LineEdit`, and `TextEdit`.
+ - Added functions on color: `transparentize`, `mix`, and `with-alpha`.
+ - Added a `close()` function and a `close-on-click` boolean property to `PopupWindow`.
+ - Added basic translation infrastructure with `@tr("...")`.
+ - Added `absolute-position` property to every element, for computing window-absolute positions.
+ - Added `primary` boolean property to `Button` to configure its visual appearance.
+ - Added `current-row` to `StandardTableView`.
 
 ### Rust
 
  - Added `slint::Image::load_from_svg_data(buffer: &[u8])` to load SVGs from memory.
+ - Added `slint::platform::WindowEvent::ScaleFactorChanged` to allow backends to report the current window scale factor.
+ - Added `slint::Image::from_borrowed_gl_2d_rgba_texture` to create images from borrowed OpenGL textures.
+ - In the Slint language, struct can be annotated with `@rust-attr(...)` that is forwarded as a Rust attribute (`#[...]`) for the generated struct.
+ - Added a `serde` feature to enable serialization of some Slint data structures.
+ - Added convenience `From` conversions for `ModelRc` from slices and arrays.
+ - `slint-viewer` gained the ability to preview .rs files with a `slint!` macro.
+ - Added a `spawn_local` function to run async code in the Slint event loop.
+
+### C++
+
+ - Added `slint::Image::create_from_borrowed_gl_2d_rgba_texture` to create images from borrowed OpenGL textures.
+ - Added `[[nodiscard]]` in a function signatures.
+ - Experimental: the `slint::platform::WindowAdapter` no longer takes a template parameter and has a different constructor signature.
 
 ### LSP
 
- - Fix auto-completion of local properties or arguments in callbacks or functions
+ - Fixed auto-completion of local properties or arguments in callbacks or functions.
+ - Fixed panic when the editor tries to open non-local urls.
 
 ### VSCode extension
 
- - Make a visible error message when the `slint-lsp` panics
+ - Make a visible error message when the `slint-lsp` panics.
 
 ## [1.0.2] - 2023-04-26
 
@@ -335,7 +446,7 @@ All notable changes to this project are documented in this file.
  - Added `animation-tick()`.
  - `SharedString` implements `std::fmt::Write` and added `slint::format!`.
  - `Image` can now be rotated with the `rotation-*` properties.
- - Use docking widgets and integration of slint-lsp into the [Online Code Editor](https://slint-ui.com/editor).
+ - Use docking widgets and integration of slint-lsp into the [Online Code Editor](https://slint.dev/editor).
 
 
 ### Fixed
@@ -828,3 +939,6 @@ as well as the [Rust migration guide for the `sixtyfps` crate](api/rs/slint/migr
 [1.0.0]: https://github.com/slint-ui/slint/releases/tag/v1.0.0
 [1.0.1]: https://github.com/slint-ui/slint/releases/tag/v1.0.1
 [1.0.2]: https://github.com/slint-ui/slint/releases/tag/v1.0.2
+[1.1.0]: https://github.com/slint-ui/slint/releases/tag/v1.1.0
+[1.1.1]: https://github.com/slint-ui/slint/releases/tag/v1.1.1
+[1.2.0]: https://github.com/slint-ui/slint/releases/tag/v1.2.0

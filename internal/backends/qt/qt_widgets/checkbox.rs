@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 use i_slint_core::input::{FocusEventResult, KeyEventType};
 
@@ -18,11 +18,18 @@ pub struct NativeCheckBox {
     pub toggled: Callback<VoidArg>,
     pub text: Property<SharedString>,
     pub checked: Property<bool>,
+    widget_ptr: std::cell::Cell<SlintTypeErasedWidgetPtr>,
+    animation_tracker: Property<i32>,
     pub cached_rendering_data: CachedRenderingData,
 }
 
 impl Item for NativeCheckBox {
-    fn init(self: Pin<&Self>, _window_adapter: &Rc<dyn WindowAdapter>) {}
+    fn init(self: Pin<&Self>, _self_rc: &ItemRc) {
+        let animation_tracker_property_ptr = Self::FIELD_OFFSETS.animation_tracker.apply_pin(self);
+        self.widget_ptr.set(cpp! { unsafe [animation_tracker_property_ptr as "void*"] -> SlintTypeErasedWidgetPtr as "std::unique_ptr<SlintTypeErasedWidget>"  {
+            return make_unique_animated_widget<QCheckBox>(animation_tracker_property_ptr);
+        }})
+    }
 
     fn geometry(self: Pin<&Self>) -> LogicalRect {
         LogicalRect::new(
@@ -37,14 +44,16 @@ impl Item for NativeCheckBox {
         _window_adapter: &Rc<dyn WindowAdapter>,
     ) -> LayoutInfo {
         let text: qttypes::QString = self.text().as_str().into();
+        let widget: NonNull<()> = SlintTypeErasedWidgetPtr::qwidget_ptr(&self.widget_ptr);
         let size = cpp!(unsafe [
-            text as "QString"
+            text as "QString",
+            widget as "QWidget*"
         ] -> qttypes::QSize as "QSize" {
             ensure_initialized();
             QStyleOptionButton option;
             option.rect = option.fontMetrics.boundingRect(text);
             option.text = std::move(text);
-            return qApp->style()->sizeFromContents(QStyle::CT_CheckBox, &option, option.rect.size(), nullptr);
+            return qApp->style()->sizeFromContents(QStyle::CT_CheckBox, &option, option.rect.size(), widget);
         });
         match orientation {
             Orientation::Horizontal => {
@@ -145,6 +154,7 @@ impl Item for NativeCheckBox {
             initial_state as "int"
         ] {
             QStyleOptionButton option;
+            option.styleObject = widget;
             option.state |= QStyle::State(initial_state);
             option.text = std::move(text);
             option.rect = QRect(QPoint(), size / dpr);

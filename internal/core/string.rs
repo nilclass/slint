@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 //! module for the SharedString and related things
 
@@ -134,6 +134,28 @@ impl AsRef<str> for SharedString {
     }
 }
 
+#[cfg(feature = "serde")]
+impl serde::Serialize for SharedString {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let string = self.as_str();
+        serializer.serialize_str(string)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for SharedString {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let string = String::deserialize(deserializer)?;
+        Ok(SharedString::from(string))
+    }
+}
+
 #[cfg(feature = "std")]
 impl AsRef<std::ffi::CStr> for SharedString {
     #[inline]
@@ -232,6 +254,12 @@ impl Write for SharedString {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         self.push_str(s);
         Ok(())
+    }
+}
+
+impl core::borrow::Borrow<str> for SharedString {
+    fn borrow(&self) -> &str {
+        self.as_str()
     }
 }
 
@@ -397,4 +425,13 @@ pub(crate) mod ffi {
         append("!");
         assert_eq!(s.as_str(), "Hello, world!");
     }
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn test_serialize_deserialize_sharedstring() {
+    let v = SharedString::from("data");
+    let serialized = serde_json::to_string(&v).unwrap();
+    let deserialized: SharedString = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(v, deserialized);
 }

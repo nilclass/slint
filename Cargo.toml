@@ -1,10 +1,11 @@
-# Copyright © SixtyFPS GmbH <info@slint-ui.com>
-# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+# Copyright © SixtyFPS GmbH <info@slint.dev>
+# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 [workspace]
 members = [
     'api/cpp',
     'api/node/native',
+    'api/napi',
     'api/rs/build',
     'api/rs/macros',
     'api/rs/slint',
@@ -15,6 +16,8 @@ members = [
     'examples/imagefilter',
     'examples/memory',
     'examples/opengl_underlay',
+    'examples/opengl_texture',
+    'examples/ffmpeg',
     'examples/plotter',
     'examples/printerdemo_old/rust',
     'examples/printerdemo/rust',
@@ -33,6 +36,7 @@ members = [
     'internal/backends/qt',
     'internal/backends/selector',
     'internal/backends/testing',
+    'internal/backends/linuxkms',
     'internal/renderers/skia',
     'internal/renderers/femtovg',
     'internal/common',
@@ -53,12 +57,14 @@ members = [
     'tools/lsp',
     'tools/updater',
     'tools/viewer',
+    'tools/tr-extractor',
     'xtask',
 ]
 
 default-members = [
     'api/rs/build',
     'api/rs/slint',
+    'api/napi',
     'examples/gallery',
     'examples/memory',
     'examples/printerdemo_old/rust',
@@ -90,9 +96,10 @@ resolver="2"
 rust-version = "1.66"
 
 [workspace.dependencies]
-resvg = { version= "0.32.0", default-features = false }
-fontdb = { version = "0.13.1", features = ["fontconfig"] }
-yeslogic-fontconfig-sys = { version = "3.2.0", features = ["dlopen"] }
+resvg = { version= "0.34.0", default-features = false, features = ["text"] }
+fontdb = { version = "0.14.1", default-features = false }
+send_wrapper = { version = "0.6.0" }
+cbindgen = { version = "0.24", default-features = false }
 
 [profile.release]
 lto = true

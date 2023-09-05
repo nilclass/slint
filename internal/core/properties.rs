@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 /*!
     Property binding engine.
@@ -11,10 +11,10 @@
 #![allow(unsafe_code)]
 #![warn(missing_docs)]
 
+/// A singled linked list whose nodes are pinned
 mod single_linked_list_pin {
     #![allow(unsafe_code)]
     use alloc::boxed::Box;
-    ///! A singled linked list whose nodes are pinned
     use core::pin::Pin;
 
     type NodePtr<T> = Option<Pin<Box<SingleLinkedListPinNode<T>>>>;
@@ -48,7 +48,7 @@ mod single_linked_list_pin {
         }
 
         #[allow(unused)]
-        pub fn iter<'a>(&'a self) -> impl Iterator<Item = Pin<&T>> + 'a {
+        pub fn iter(&self) -> impl Iterator<Item = Pin<&T>> {
             struct I<'a, T>(&'a NodePtr<T>);
 
             impl<'a, T> Iterator for I<'a, T> {
@@ -253,7 +253,9 @@ struct BindingVTable {
 
 /// A binding trait object can be used to dynamically produces values for a property.
 ///
-/// Safety: IS_TWO_WAY_BINDNG cannot be true if Self is not a TwoWayBinding
+/// # Safety
+///
+/// IS_TWO_WAY_BINDING cannot be true if Self is not a TwoWayBinding
 unsafe trait BindingCallable {
     /// This function is called by the property to evaluate the binding and produce a new value. The
     /// previous property value is provided in the value parameter.
@@ -280,7 +282,7 @@ unsafe trait BindingCallable {
     }
 
     /// Set to true if and only if Self is a TwoWayBinding<T>
-    const IS_TWO_WAY_BINDNG: bool = false;
+    const IS_TWO_WAY_BINDING: bool = false;
 }
 
 unsafe impl<F: Fn(*mut ()) -> BindingResult> BindingCallable for F {
@@ -431,7 +433,7 @@ fn alloc_binding_holder<B: BindingCallable + 'static>(binding: B) -> *mut Bindin
         dep_nodes: Default::default(),
         vtable: <B as HasBindingVTable>::VT,
         dirty: Cell::new(true), // starts dirty so it evaluates the property when used
-        is_two_way_binding: B::IS_TWO_WAY_BINDNG,
+        is_two_way_binding: B::IS_TWO_WAY_BINDING,
         pinned: PhantomPinned,
         #[cfg(slint_debug_property)]
         debug_name: Default::default(),
@@ -674,7 +676,9 @@ unsafe fn mark_dependencies_dirty(dependencies: *mut DependencyListHead) {
             "Const property marked as dirty"
         );
 
-        mark_dependencies_dirty(binding.dependencies.as_ptr() as *mut DependencyListHead)
+        if !was_dirty {
+            mark_dependencies_dirty(binding.dependencies.as_ptr() as *mut DependencyListHead)
+        }
     });
 }
 
@@ -977,13 +981,13 @@ impl<T: PartialEq + Clone + 'static> Property<T> {
                 true
             }
 
-            const IS_TWO_WAY_BINDNG: bool = true;
+            const IS_TWO_WAY_BINDING: bool = true;
         }
 
         #[cfg(slint_debug_property)]
         let debug_name = format!("<{}<=>{}>", prop1.debug_name.borrow(), prop2.debug_name.borrow());
 
-        let value = prop2.get_untracked();
+        let value = prop2.get_internal();
 
         let prop1_handle_val = prop1.handle.handle.get();
         if prop1_handle_val & 0b10 == 0b10 {
@@ -1139,21 +1143,8 @@ fn property_two_ways_recurse_from_binding() {
 }
 
 mod properties_animations;
+pub use crate::items::StateInfo;
 pub use properties_animations::*;
-
-/// Value of the state property
-///
-/// A state is just the current state, but also has information about the previous state and the moment it changed
-#[repr(C)]
-#[derive(Clone, Default, Debug, PartialEq)]
-pub struct StateInfo {
-    /// The current state value
-    pub current_state: i32,
-    /// The previous state
-    pub previous_state: i32,
-    /// The instant in which the state changed last
-    pub change_time: crate::animations::Instant,
-}
 
 struct StateInfoBinding<F> {
     dirty_time: Cell<Option<crate::animations::Instant>>,
@@ -1322,13 +1313,13 @@ impl<DirtyHandler: PropertyDirtyHandler> PropertyTracker<DirtyHandler> {
     /// Sets the specified callback handler function, which will be called if any
     /// properties that this tracker depends on becomes dirty.
     ///
-    /// The `handmer` `PropertyDirtyHandler` is a trait which is implemented for
+    /// The `handler` `PropertyDirtyHandler` is a trait which is implemented for
     /// any `Fn()` closure
     ///
-    /// Note that the handler will be invoked immediatly when a property is modified or
+    /// Note that the handler will be invoked immediately when a property is modified or
     /// marked as dirty. In particular, the involved property are still in a locked
     /// state and should not be accessed while the handler is run. This function can be
-    /// usefull to mark some work to be done later.
+    /// useful to mark some work to be done later.
     pub fn new_with_dirty_handler(handler: DirtyHandler) -> Self {
         /// Safety: _self must be a pointer to a `BindingHolder<DirtyHandler>`
         unsafe fn mark_dirty<B: PropertyDirtyHandler>(

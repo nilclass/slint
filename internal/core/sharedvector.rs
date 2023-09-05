@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 //! module for the SharedVector and related things
 #![allow(unsafe_code)]
@@ -10,7 +10,7 @@ use core::mem::MaybeUninit;
 use core::ops::Deref;
 use core::ptr::NonNull;
 
-use atomic_polyfill as atomic;
+use portable_atomic as atomic;
 
 #[repr(C)]
 struct SharedVectorHeader {
@@ -223,7 +223,7 @@ impl<T: Clone> SharedVector<T> {
         }
         self.detach(new_len);
         // Safety: detach ensured that the array is not shared.
-        let mut inner = unsafe { self.inner.as_mut() };
+        let inner = unsafe { self.inner.as_mut() };
 
         if inner.header.size >= new_len {
             self.shrink(new_len);
@@ -247,7 +247,7 @@ impl<T: Clone> SharedVector<T> {
             unsafe { self.inner.as_ref().header.refcount.load(atomic::Ordering::Relaxed) } == 1
         );
         // Safety: caller (and above debug_assert) must ensure that the array is not shared.
-        let mut inner = unsafe { self.inner.as_mut() };
+        let inner = unsafe { self.inner.as_mut() };
 
         while inner.header.size > new_len {
             inner.header.size -= 1;
@@ -428,6 +428,43 @@ impl<T: Clone> IntoIterator for SharedVector<T> {
     }
 }
 
+#[cfg(feature = "serde")]
+use serde::ser::SerializeSeq;
+#[cfg(feature = "serde")]
+impl<T> serde::Serialize for SharedVector<T>
+where
+    T: serde::Serialize,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut seq = serializer.serialize_seq(Some(self.len()))?;
+        for item in self.into_iter() {
+            seq.serialize_element(item)?;
+        }
+        seq.end()
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, T> serde::Deserialize<'de> for SharedVector<T>
+where
+    T: Clone + serde::Deserialize<'de>,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let mut elements: Vec<T> = serde::Deserialize::deserialize(deserializer)?;
+        let mut shared_vec = SharedVector::with_capacity(elements.len());
+        for elem in elements.drain(..) {
+            shared_vec.push(elem);
+        }
+        Ok(shared_vec)
+    }
+}
+
 enum IntoIterInner<T> {
     Shared(SharedVector<T>, usize),
     // Elements up to the usize member are already moved out
@@ -605,4 +642,13 @@ pub(crate) mod ffi {
     pub unsafe extern "C" fn slint_shared_vector_empty() -> *const u8 {
         &SHARED_NULL as *const _ as *const u8
     }
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn test_serialize_deserialize_sharedvector() {
+    let v = SharedVector::from([1, 2, 3]);
+    let serialized = serde_json::to_string(&v).unwrap();
+    let deserialized: SharedVector<i32> = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(v, deserialized);
 }

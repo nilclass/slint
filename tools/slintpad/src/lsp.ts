@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 // cSpell: ignore winit
 
@@ -23,7 +23,7 @@ import {
 
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api";
 
-import slint_init, * as slint_preview from "@preview/slint_wasm_interpreter.js";
+import slint_init, * as slint_preview from "@lsp/slint_lsp_wasm.js";
 import { HighlightRequestCallback } from "./text";
 
 let is_event_loop_running = false;
@@ -113,14 +113,14 @@ type BackendChatter =
       };
 
 type HighlightInfo = { file: string; offset: number };
+type InstanceCallback<R> = (_instance: slint_preview.WrappedInstance) => R;
 
 class PreviewerBackend {
     #client_port: MessagePort;
     #lsp_port: MessagePort;
     #canvas_id: string | null = null;
-    #instance: slint_preview.WrappedInstance | null = null;
+    #instance: Promise<slint_preview.WrappedInstance> | null = null;
     #to_highlight: HighlightInfo = { file: "", offset: 0 };
-    #is_rendering = false;
     #picker_mode = false;
 
     constructor(client_port: MessagePort, lsp_port: MessagePort) {
@@ -142,15 +142,6 @@ class PreviewerBackend {
                 }
                 if (m.data.command === "render") {
                     const port = m.ports[0];
-                    if (this.#is_rendering) {
-                        port.postMessage({
-                            type: "Error",
-                            data: "Already rendering",
-                        });
-                        port.close();
-                        return;
-                    }
-                    this.#is_rendering = true;
 
                     this.render(
                         m.data.style,
@@ -193,7 +184,6 @@ class PreviewerBackend {
                             port.postMessage({ type: "Error", data: e });
                             port.close();
                         });
-                    this.#is_rendering = false;
                 }
             } catch (e) {
                 client_port.postMessage({ type: "Error", data: e });
@@ -206,9 +196,9 @@ class PreviewerBackend {
         this.configure_picker_mode();
     }
 
-    protected configure_picker_mode() {
-        if (this.#instance !== null) {
-            this.#instance.on_element_selected(
+    protected async configure_picker_mode() {
+        await this.with_instance((instance) => {
+            instance.on_element_selected(
                 (
                     url: string,
                     start_line: number,
@@ -224,8 +214,17 @@ class PreviewerBackend {
                     });
                 },
             );
-            this.#instance.set_design_mode(this.#picker_mode);
+            instance.set_design_mode(this.#picker_mode);
+        });
+    }
+
+    private async with_instance<R>(
+        callback: InstanceCallback<R>,
+    ): Promise<R | null> {
+        if (this.#instance == null) {
+            return null;
         }
+        return callback(await this.#instance);
     }
 
     set canvas_id(id: string | null) {
@@ -275,8 +274,6 @@ class PreviewerBackend {
             // It's not enough for the canvas element to exist, in order to extract a webgl rendering
             // context, the element needs to be attached to the window's dom.
             if (this.#instance == null) {
-                this.#instance = component.create(this.canvas_id!); // eslint-disable-line
-                this.#instance.show();
                 try {
                     if (!is_event_loop_running) {
                         slint_preview.run_event_loop();
@@ -289,20 +286,25 @@ class PreviewerBackend {
                     // the model markers.
                     is_event_loop_running = true; // Assume the winit caused the exception and that the event loop is up now
                 }
+                this.#instance = (async () => {
+                    let new_instance = await component.create(this.canvas_id!); // eslint-disable-line
+                    await new_instance.show();
+                    return new_instance;
+                })();
             } else {
                 this.#instance = component.create_with_existing_window(
-                    this.#instance,
+                    await this.#instance,
                 );
-                this.configure_picker_mode();
+                await this.configure_picker_mode();
             }
         }
 
         return Promise.resolve(markers);
     }
 
-    private highlight(file_path: string, offset: number) {
+    private async highlight(file_path: string, offset: number) {
         this.#to_highlight = { file: file_path, offset: offset };
-        this.#instance?.highlight(file_path, offset);
+        this.with_instance((instance) => instance.highlight(file_path, offset));
     }
 }
 

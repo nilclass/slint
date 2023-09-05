@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 // This file is the entry point for the vscode extension (not the browser one)
 
@@ -41,7 +41,6 @@ function lspPlatform(): Platform | null {
         if (typeof vscode.env.remoteName !== "undefined") {
             remote_env_options = {
                 DISPLAY: ":0",
-                SLINT_FULLSCREEN: "1",
             };
         }
         if (process.arch === "x64") {
@@ -171,11 +170,19 @@ function startClient(context: vscode.ExtensionContext) {
 
     cl.onDidChangeState((event) => {
         let properly_stopped = cl.hasOwnProperty("slint_stopped");
-        if (!properly_stopped && event.newState === State.Stopped && event.oldState == State.Running) {
-            cl.outputChannel.appendLine("The Slint Language Server crashed. This is a bug.\nPlease open an issue on https://github.com/slint-ui/slint/issues");
+        if (
+            !properly_stopped &&
+            event.newState === State.Stopped &&
+            event.oldState === State.Running
+        ) {
+            cl.outputChannel.appendLine(
+                "The Slint Language Server crashed. This is a bug.\nPlease open an issue on https://github.com/slint-ui/slint/issues",
+            );
             cl.outputChannel.show();
-            vscode.commands.executeCommand('workbench.action.output.focus');
-            vscode.window.showErrorMessage("The Slint Language Server crashed! Please open a bug on the Slint bug tracker with the panic message.");
+            vscode.commands.executeCommand("workbench.action.output.focus");
+            vscode.window.showErrorMessage(
+                "The Slint Language Server crashed! Please open a bug on the Slint bug tracker with the panic message.",
+            );
         }
     });
 
@@ -194,6 +201,9 @@ function startClient(context: vscode.ExtensionContext) {
 }
 
 export function activate(context: vscode.ExtensionContext) {
+    if (process.env.hasOwnProperty("CODESPACES")) {
+        vscode.workspace.getConfiguration("slint").update("preview.providedByEditor", true, vscode.ConfigurationTarget.Global);
+    }
     [statusBar, properties_provider] = common.activate(context, client, (ctx) =>
         startClient(ctx),
     );

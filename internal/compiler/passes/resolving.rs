@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 //! Passes that resolve the property binding expression.
 //!
@@ -155,7 +155,13 @@ impl Expression {
                 return Expression::Invalid;
             }
         };
-        e.maybe_convert_to(ctx.property_type.clone(), &node, ctx.diag)
+        if !matches!(ctx.property_type, Type::Callback { .. } | Type::Function { .. }) {
+            e.maybe_convert_to(ctx.property_type.clone(), &node, ctx.diag)
+        } else {
+            // Binding to a callback or function shouldn't happen
+            assert!(ctx.diag.has_error());
+            e
+        }
     }
 
     fn from_codeblock_node(node: syntax_nodes::CodeBlock, ctx: &mut LookupCtx) -> Expression {
@@ -241,6 +247,7 @@ impl Expression {
             .map(|n| Self::from_expression_node(n, ctx))
             .or_else(|| node.AtImageUrl().map(|n| Self::from_at_image_url_node(n, ctx)))
             .or_else(|| node.AtGradient().map(|n| Self::from_at_gradient(n, ctx)))
+            .or_else(|| node.AtTr().map(|n| Self::from_at_tr(n, ctx)))
             .or_else(|| {
                 node.QualifiedName().map(|n| {
                     let exp =
@@ -334,13 +341,10 @@ impl Expression {
                 s
             } else {
                 ctx.type_loader
-                    .map(|loader| {
-                        loader
-                            .resolve_import_path(Some(&(*node).clone().into()), &s)
-                            .0
-                            .to_string_lossy()
-                            .to_string()
+                    .and_then(|loader| {
+                        loader.resolve_import_path(Some(&(*node).clone().into()), &s)
                     })
+                    .map(|i| i.0.to_string_lossy().to_string())
                     .unwrap_or(s)
             }
         };
@@ -482,7 +486,10 @@ impl Expression {
                 rest.iter().position(|s| !matches!(s.1, Expression::Invalid)).unwrap_or(rest.len());
             if pos > 0 && pos < rest.len() {
                 let (middle, after) = rest.split_at_mut(pos);
-                let begin = &before.last().expect("The first should never be invalid").1;
+                let begin = before
+                    .last()
+                    .map(|s| &s.1)
+                    .unwrap_or(&Expression::NumberLiteral(1., Unit::None));
                 let end = &after.first().expect("The last should never be invalid").1;
                 for (i, (_, e)) in middle.iter_mut().enumerate() {
                     debug_assert!(matches!(e, Expression::Invalid));
@@ -512,6 +519,165 @@ impl Expression {
         match grad_kind {
             GradKind::Linear { angle } => Expression::LinearGradient { angle, stops },
             GradKind::Radial => Expression::RadialGradient { stops },
+        }
+    }
+
+    fn from_at_tr(node: syntax_nodes::AtTr, ctx: &mut LookupCtx) -> Expression {
+        let Some(string) = node
+            .child_text(SyntaxKind::StringLiteral)
+            .and_then(|s| crate::literals::unescape_string(&s))
+        else {
+            ctx.diag.push_error("Cannot parse string literal".into(), &node);
+            return Expression::Invalid;
+        };
+        let context = node.TrContext().map(|n| {
+            n.child_text(SyntaxKind::StringLiteral)
+                .and_then(|s| crate::literals::unescape_string(&s))
+                .unwrap_or_else(|| {
+                    ctx.diag.push_error("Cannot parse string literal".into(), &n);
+                    Default::default()
+                })
+        });
+        let plural = node.TrPlural().map(|pl| {
+            let s = pl
+                .child_text(SyntaxKind::StringLiteral)
+                .and_then(|s| crate::literals::unescape_string(&s))
+                .unwrap_or_else(|| {
+                    ctx.diag.push_error("Cannot parse string literal".into(), &pl);
+                    Default::default()
+                });
+            let n = pl.Expression();
+            let expr = Expression::from_expression_node(n.clone(), ctx).maybe_convert_to(
+                Type::Int32,
+                &n,
+                ctx.diag,
+            );
+            (s, expr)
+        });
+
+        let domain = ctx
+            .type_loader
+            .and_then(|tl| tl.compiler_config.translation_domain.clone())
+            .unwrap_or_default();
+
+        let subs = node.Expression().map(|n| {
+            Expression::from_expression_node(n.clone(), ctx).maybe_convert_to(
+                Type::String,
+                &n,
+                ctx.diag,
+            )
+        });
+        let values = subs.collect::<Vec<_>>();
+
+        // check format string
+        {
+            let mut arg_idx = 0;
+            let mut pos_max = 0;
+            let mut pos = 0;
+            let mut has_n = false;
+            while let Some(mut p) = string[pos..].find(|x| x == '{' || x == '}') {
+                if string.len() - pos < p + 1 {
+                    ctx.diag.push_error(
+                        "Unescaped trailing '{' in format string. Escape '{' with '{{'".into(),
+                        &node,
+                    );
+                    break;
+                }
+                p += pos;
+
+                // Skip escaped }
+                if string.get(p..=p) == Some("}") {
+                    if string.get(p + 1..=p + 1) == Some("}") {
+                        pos = p + 2;
+                        continue;
+                    } else {
+                        ctx.diag.push_error(
+                            "Unescaped '}' in format string. Escape '}' with '}}'".into(),
+                            &node,
+                        );
+                        break;
+                    }
+                }
+
+                // Skip escaped {
+                if string.get(p + 1..=p + 1) == Some("{") {
+                    pos = p + 2;
+                    continue;
+                }
+
+                // Find the argument
+                let end = if let Some(end) = string[p..].find('}') {
+                    end + p
+                } else {
+                    ctx.diag.push_error(
+                        "Unterminated placeholder in format string. '{' must be escaped with '{{'"
+                            .into(),
+                        &node,
+                    );
+                    break;
+                };
+                let argument = &string[p + 1..end];
+                if argument.is_empty() {
+                    arg_idx += 1;
+                } else if let Ok(n) = argument.parse::<u16>() {
+                    pos_max = pos_max.max(n as usize + 1);
+                } else if argument == "n" {
+                    has_n = true;
+                    if plural.is_none() {
+                        ctx.diag.push_error(
+                            "`{n}` placeholder can only be found in plural form".into(),
+                            &node,
+                        );
+                    }
+                } else {
+                    ctx.diag
+                        .push_error("Invalid '{...}' placeholder in format string. The placeholder must be a number, or braces must be escaped with '{{' and '}}'".into(), &node);
+                    break;
+                };
+                pos = end + 1;
+            }
+            if arg_idx > 0 && pos_max > 0 {
+                ctx.diag.push_error(
+                    "Cannot mix positional and non-positional placeholder in format string".into(),
+                    &node,
+                );
+            } else if arg_idx > values.len() || pos_max > values.len() {
+                let num = arg_idx.max(pos_max);
+                let note = if !has_n && plural.is_some() {
+                    ". Note: use `{n}` for the argument after '%'"
+                } else {
+                    ""
+                };
+                ctx.diag.push_error(
+                    format!("Format string contains {num} placeholders, but only {} extra arguments were given{note}", values.len()),
+                    &node,
+                );
+            }
+        }
+
+        let plural = plural.unwrap_or((String::new(), Expression::NumberLiteral(1., Unit::None)));
+
+        let get_component_name = || {
+            ctx.component_scope
+                .first()
+                .and_then(|e| e.borrow().enclosing_component.upgrade())
+                .map(|c| c.id.clone())
+        };
+
+        Expression::FunctionCall {
+            function: Box::new(Expression::BuiltinFunctionReference(
+                BuiltinFunction::Translate,
+                Some(node.to_source_location()),
+            )),
+            arguments: vec![
+                Expression::StringLiteral(string),
+                Expression::StringLiteral(context.or_else(get_component_name).unwrap_or_default()),
+                Expression::StringLiteral(domain),
+                Expression::Array { element_ty: Type::String, values },
+                plural.1,
+                Expression::StringLiteral(plural.0),
+            ],
+            source_location: Some(node.to_source_location()),
         }
     }
 
@@ -882,13 +1048,17 @@ impl Expression {
             .unwrap_or('_');
 
         let exp = match op {
-            '!' => exp.maybe_convert_to(Type::Bool, &node, &mut ctx.diag),
+            '!' => exp.maybe_convert_to(Type::Bool, &node, ctx.diag),
             '+' | '-' => {
                 let ty = exp.ty();
                 if ty.default_unit().is_none()
                     && !matches!(
                         ty,
-                        Type::Int32 | Type::Float32 | Type::UnitProduct(..) | Type::Invalid
+                        Type::Int32
+                            | Type::Float32
+                            | Type::Percent
+                            | Type::UnitProduct(..)
+                            | Type::Invalid
                     )
                 {
                     ctx.diag.push_error(format!("Unary '{op}' not supported on {ty}"), &node);
@@ -965,6 +1135,7 @@ impl Expression {
             fields: values.iter().map(|(k, v)| (k.clone(), v.ty())).collect(),
             name: None,
             node: None,
+            rust_attributes: None,
         };
         Expression::Struct { ty, values }
     }
@@ -1026,8 +1197,14 @@ impl Expression {
                             fields: mut result_fields,
                             name: result_name,
                             node: result_node,
+                            rust_attributes,
                         },
-                        Type::Struct { fields: elem_fields, name: elem_name, node: elem_node },
+                        Type::Struct {
+                            fields: elem_fields,
+                            name: elem_name,
+                            node: elem_node,
+                            rust_attributes: deriven,
+                        },
                     ) => {
                         for (elem_name, elem_ty) in elem_fields.into_iter() {
                             match result_fields.entry(elem_name) {
@@ -1048,6 +1225,7 @@ impl Expression {
                             name: result_name.or(elem_name),
                             fields: result_fields,
                             node: result_node.or(elem_node),
+                            rust_attributes: rust_attributes.or(deriven),
                         }
                     }
                     (Type::Color, Type::Brush) | (Type::Brush, Type::Color) => Type::Brush,

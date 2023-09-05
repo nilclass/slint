@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 // cSpell: ignore unerase
 
@@ -10,6 +10,7 @@ use core::ptr::NonNull;
 use dynamic_type::{Instance, InstanceBox};
 use i_slint_compiler::expression_tree::{Expression, NamedReference};
 use i_slint_compiler::langtype::{ElementType, Type};
+use i_slint_compiler::llr::ComponentContainerIndex;
 use i_slint_compiler::object_tree::ElementRc;
 use i_slint_compiler::*;
 use i_slint_compiler::{diagnostics::BuildDiagnostics, object_tree::PropertyDeclaration};
@@ -17,6 +18,7 @@ use i_slint_core::accessibility::AccessibleStringProperty;
 use i_slint_core::component::{
     Component, ComponentRef, ComponentRefPin, ComponentVTable, ComponentWeak, IndexRange,
 };
+use i_slint_core::component_factory::ComponentFactory;
 use i_slint_core::item_tree::{
     ItemRc, ItemTreeNode, ItemVisitorRefMut, ItemVisitorVTable, ItemWeak, TraversalOrder,
     VisitChildrenResult,
@@ -30,8 +32,9 @@ use i_slint_core::platform::PlatformError;
 use i_slint_core::properties::InterpolatedPropertyValue;
 use i_slint_core::rtti::{self, AnimatedBindingKind, FieldOffset, PropertyInfo};
 use i_slint_core::slice::Slice;
-use i_slint_core::window::{WindowAdapter, WindowInner};
+use i_slint_core::window::{WindowAdapterRc, WindowInner};
 use i_slint_core::{Brush, Color, Property, SharedString, SharedVector};
+use once_cell::unsync::OnceCell;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::{pin::Pin, rc::Rc};
@@ -56,13 +59,14 @@ impl<'id> ComponentBox<'id> {
         InstanceRef { instance: self.instance.as_pin_ref(), component_type: &self.component_type }
     }
 
-    pub fn window_adapter(&self) -> &Rc<dyn WindowAdapter> {
-        self.component_type
-            .window_adapter_offset
-            .apply(self.instance.as_pin_ref().get_ref())
-            .as_ref()
-            .as_ref()
-            .unwrap()
+    pub fn window_adapter_ref(&self) -> Result<&WindowAdapterRc, PlatformError> {
+        let root_weak = vtable::VWeak::into_dyn(self.borrow_instance().root_weak().clone());
+        InstanceRef::get_or_init_window_adapter_ref(
+            &self.component_type,
+            root_weak,
+            true,
+            self.instance.as_pin_ref().get_ref(),
+        )
     }
 }
 
@@ -195,6 +199,14 @@ impl Component for ErasedComponentBox {
         self.borrow().as_ref().parent_node(result)
     }
 
+    fn embed_component(
+        self: core::pin::Pin<&Self>,
+        parent_component: &ComponentWeak,
+        item_tree_index: usize,
+    ) -> bool {
+        self.borrow().as_ref().embed_component(parent_component, item_tree_index)
+    }
+
     fn subtree_index(self: Pin<&Self>) -> usize {
         self.borrow().as_ref().subtree_index()
     }
@@ -211,6 +223,10 @@ impl Component for ErasedComponentBox {
     ) {
         self.borrow().as_ref().accessible_string_property(index, what, result)
     }
+
+    fn window_adapter(self: Pin<&Self>, do_create: bool, result: &mut Option<WindowAdapterRc>) {
+        self.borrow().as_ref().window_adapter(do_create, result);
+    }
 }
 
 i_slint_core::ComponentVTable_static!(static COMPONENT_BOX_VT for ErasedComponentBox);
@@ -220,12 +236,13 @@ impl<'id> Drop for ErasedComponentBox {
         generativity::make_guard!(guard);
         let unerase = self.unerase(guard);
         let instance_ref = unerase.borrow_instance();
-        if let Some(window_adapter) = eval::window_adapter_ref(instance_ref) {
+        // Do not walk out of our component here:
+        if let Some(window_adapter) = instance_ref.maybe_window_adapter() {
             i_slint_core::component::unregister_component(
                 instance_ref.instance,
                 vtable::VRef::new(self),
                 instance_ref.component_type.item_array.as_slice(),
-                window_adapter,
+                &window_adapter,
             );
         }
     }
@@ -235,11 +252,13 @@ pub type DynamicComponentVRc = vtable::VRc<ComponentVTable, ErasedComponentBox>;
 
 #[derive(Default)]
 pub(crate) struct ComponentExtraData {
-    pub(crate) globals: crate::global_component::GlobalStorage,
-    pub(crate) self_weak:
-        once_cell::unsync::OnceCell<vtable::VWeak<ComponentVTable, ErasedComponentBox>>,
+    pub(crate) globals: OnceCell<crate::global_component::GlobalStorage>,
+    pub(crate) self_weak: OnceCell<vtable::VWeak<ComponentVTable, ErasedComponentBox>>,
+    pub(crate) embedding_position: OnceCell<(ComponentWeak, usize)>,
     // resource id -> file path
-    pub(crate) embedded_file_resources: HashMap<usize, String>,
+    pub(crate) embedded_file_resources: OnceCell<HashMap<usize, String>>,
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) canvas_id: OnceCell<String>,
 }
 
 struct ErasedRepeaterWithinComponent<'id>(RepeaterWithinComponent<'id, 'static>);
@@ -330,9 +349,11 @@ pub struct ComponentDescription<'id> {
     pub repeater_names: HashMap<String, usize>,
     /// Offset to a Option<ComponentPinRef>
     pub(crate) parent_component_offset:
-        Option<FieldOffset<Instance<'id>, Option<ComponentRefPin<'id>>>>,
+        Option<FieldOffset<Instance<'id>, OnceCell<ComponentRefPin<'id>>>>,
+    pub(crate) root_offset:
+        FieldOffset<Instance<'id>, OnceCell<vtable::VWeak<ComponentVTable, ErasedComponentBox>>>,
     /// Offset to the window reference
-    pub(crate) window_adapter_offset: FieldOffset<Instance<'id>, Option<Rc<dyn WindowAdapter>>>,
+    pub(crate) window_adapter_offset: FieldOffset<Instance<'id>, OnceCell<WindowAdapterRc>>,
     /// Offset of a ComponentExtraData
     pub(crate) extra_data_offset: FieldOffset<Instance<'id>, ComponentExtraData>,
     /// Keep the Rc alive
@@ -364,6 +385,15 @@ fn internal_properties_to_public<'a>(
             .unwrap_or_else(|| s.clone());
         (name, v.property_type.clone())
     })
+}
+
+#[derive(Default)]
+pub enum WindowOptions {
+    #[default]
+    CreateNewWindow,
+    UseExistingWindow(WindowAdapterRc),
+    #[cfg(target_arch = "wasm32")]
+    CreateWithCanvasId(String),
 }
 
 impl<'id> ComponentDescription<'id> {
@@ -402,28 +432,20 @@ impl<'id> ComponentDescription<'id> {
     /// Instantiate a runtime component from this ComponentDescription
     pub fn create(
         self: Rc<Self>,
-        #[cfg(target_arch = "wasm32")] canvas_id: String,
+        options: WindowOptions,
     ) -> Result<DynamicComponentVRc, PlatformError> {
-        let window_adapter = i_slint_backend_selector::with_platform(|_b| {
-            #[cfg(not(target_arch = "wasm32"))]
-            return _b.create_window_adapter();
-            #[cfg(target_arch = "wasm32")]
-            i_slint_backend_winit::create_gl_window_with_canvas_id(canvas_id)
+        i_slint_backend_selector::with_platform(|_b| {
+            // Nothing to do, just make sure a backend was created
+            Ok(())
         })?;
 
-        Ok(self.create_with_existing_window(&window_adapter))
-    }
-
-    #[doc(hidden)]
-    pub fn create_with_existing_window(
-        self: Rc<Self>,
-        window_adapter: &Rc<dyn WindowAdapter>,
-    ) -> DynamicComponentVRc {
-        let component_ref = instantiate(self, None, window_adapter, Default::default());
-        WindowInner::from_pub(component_ref.as_pin_ref().window_adapter().window())
-            .set_component(&vtable::VRc::into_dyn(component_ref.clone()));
+        let component_ref = instantiate(self, None, None, Some(&options), Default::default());
+        if let WindowOptions::UseExistingWindow(existing_adapter) = options {
+            WindowInner::from_pub(existing_adapter.window())
+                .set_component(&vtable::VRc::into_dyn(component_ref.clone()));
+        }
         component_ref.run_setup_code();
-        component_ref
+        Ok(component_ref)
     }
 
     /// Set a value to property.
@@ -614,7 +636,7 @@ impl<'id> ComponentDescription<'id> {
         // Safety: we just verified that the component has the right vtable
         let c = unsafe { InstanceRef::from_pin_ref(component, guard) };
         let extra_data = c.component_type.extra_data_offset.apply(c.instance.get_ref());
-        extra_data.globals.get(global_name).cloned().ok_or(())
+        extra_data.globals.get().unwrap().get(global_name).cloned().ok_or(())
     }
 }
 
@@ -635,12 +657,18 @@ extern "C" fn visit_children_item(
         order,
         v,
         |_, order, visitor, index| {
-            // `ensure_updated` needs a 'static lifetime so we must call get_untagged.
-            // Safety: we do not mix the component with other component id in this function
-            let rep_in_comp = unsafe { instance_ref.component_type.repeater[index].get_untagged() };
-            ensure_repeater_updated(instance_ref, rep_in_comp);
-            let repeater = rep_in_comp.offset.apply_pin(instance_ref.instance);
-            repeater.visit(order, visitor)
+            if let Some(_) = ComponentContainerIndex::try_from_repeater_index(index) {
+                // Do nothing: Our parent already did all the work!
+                VisitChildrenResult::CONTINUE
+            } else {
+                // `ensure_updated` needs a 'static lifetime so we must call get_untagged.
+                // Safety: we do not mix the component with other component id in this function
+                let rep_in_comp =
+                    unsafe { instance_ref.component_type.repeater[index].get_untagged() };
+                ensure_repeater_updated(instance_ref, rep_in_comp);
+                let repeater = rep_in_comp.offset.apply_pin(instance_ref.instance);
+                repeater.visit(order, visitor)
+            }
         },
     )
 }
@@ -652,16 +680,11 @@ fn ensure_repeater_updated<'id>(
 ) {
     let repeater = rep_in_comp.offset.apply_pin(instance_ref.instance);
     let init = || {
-        let window_adapter = instance_ref
-            .component_type
-            .window_adapter_offset
-            .apply(instance_ref.as_ref())
-            .as_ref()
-            .unwrap();
         let instance = instantiate(
             rep_in_comp.component_to_repeat.clone(),
             Some(instance_ref.borrow()),
-            window_adapter,
+            None,
+            None,
             Default::default(),
         );
         instance
@@ -772,6 +795,7 @@ pub(crate) fn generate_component<'id>(
         use i_slint_core::items::*;
         rtti.extend(
             [
+                rtti_for::<ComponentContainer>(),
                 rtti_for::<Empty>(),
                 rtti_for::<ImageItem>(),
                 rtti_for::<ClippedImage>(),
@@ -850,6 +874,20 @@ pub(crate) fn generate_component<'id>(
                 }
                 .into(),
             );
+        }
+
+        fn push_component_placeholder_item(
+            &mut self,
+            item: &i_slint_compiler::object_tree::ElementRc,
+            parent_index: u32,
+            _component_state: &Self::SubComponentState,
+        ) {
+            let component_index = ComponentContainerIndex::from(parent_index as usize);
+            self.tree_array.push(ItemTreeNode::DynamicTree {
+                index: component_index.as_repeater_index(),
+                parent_index,
+            });
+            self.original_elements.push(item.clone());
         }
 
         fn push_native_item(
@@ -982,11 +1020,13 @@ pub(crate) fn generate_component<'id>(
                     .insert(name.clone(), builder.type_builder.add_field_type::<Callback>());
                 continue;
             }
+            Type::ComponentFactory => property_info::<ComponentFactory>(),
             Type::Struct { name: Some(name), .. } if name.ends_with("::StateInfo") => {
                 property_info::<i_slint_core::properties::StateInfo>()
             }
             Type::Struct { .. } => property_info::<Value>(),
             Type::Array(_) => property_info::<Value>(),
+            Type::Easing => property_info::<i_slint_core::animations::EasingCurve>(),
             Type::Percent => property_info::<f32>(),
             Type::Enumeration(e) => {
                 macro_rules! match_enum_type {
@@ -995,7 +1035,7 @@ pub(crate) fn generate_component<'id>(
                             $(
                                 stringify!($Name) => property_info::<i_slint_core::items::$Name>(),
                             )*
-                            _ => panic!("unknown enum"),
+                            _ => property_info::<Value>(),
                         }
                     }
                 }
@@ -1003,7 +1043,16 @@ pub(crate) fn generate_component<'id>(
             }
             Type::LayoutCache => property_info::<SharedVector<f32>>(),
             Type::Function { .. } => continue,
-            _ => panic!("bad type {:?}", &decl.property_type),
+
+            // These can't be used in properties
+            Type::Invalid
+            | Type::Void
+            | Type::InferredProperty
+            | Type::InferredCallback
+            | Type::Model
+            | Type::PathData
+            | Type::UnitProduct(_)
+            | Type::ElementReference => panic!("bad type {:?}", &decl.property_type),
         };
         custom_properties.insert(
             name.clone(),
@@ -1031,13 +1080,16 @@ pub(crate) fn generate_component<'id>(
     }
 
     let parent_component_offset = if component.parent_element.upgrade().is_some() {
-        Some(builder.type_builder.add_field_type::<Option<ComponentRefPin>>())
+        Some(builder.type_builder.add_field_type::<OnceCell<ComponentRefPin>>())
     } else {
         None
     };
 
-    let window_adapter_offset =
-        builder.type_builder.add_field_type::<Option<Rc<dyn WindowAdapter>>>();
+    let root_offset = builder
+        .type_builder
+        .add_field_type::<OnceCell<vtable::VWeak<ComponentVTable, ErasedComponentBox>>>();
+
+    let window_adapter_offset = builder.type_builder.add_field_type::<OnceCell<WindowAdapterRc>>();
 
     let extra_data_offset = builder.type_builder.add_field_type::<ComponentExtraData>();
 
@@ -1080,9 +1132,11 @@ pub(crate) fn generate_component<'id>(
         get_subtree_range,
         get_subtree_component,
         parent_node,
+        embed_component,
         subtree_index,
         accessible_role,
         accessible_string_property,
+        window_adapter,
         drop_in_place,
         dealloc,
     };
@@ -1099,6 +1153,7 @@ pub(crate) fn generate_component<'id>(
         repeater: builder.repeater,
         repeater_names: builder.repeater_names,
         parent_component_offset,
+        root_offset,
         window_adapter_offset,
         extra_data_offset,
         public_properties,
@@ -1201,42 +1256,13 @@ fn make_binding_eval_closure(
 pub fn instantiate(
     component_type: Rc<ComponentDescription>,
     parent_ctx: Option<ComponentRefPin>,
-    window_adapter: &Rc<dyn WindowAdapter>,
+    root: Option<vtable::VWeak<ComponentVTable, ErasedComponentBox>>,
+    window_options: Option<&WindowOptions>,
     mut globals: crate::global_component::GlobalStorage,
 ) -> DynamicComponentVRc {
-    let mut instance = component_type.dynamic_type.clone().create_instance();
-
-    if let Some(parent) = parent_ctx {
-        *component_type.parent_component_offset.unwrap().apply_mut(instance.as_mut()) =
-            Some(parent);
-    } else {
-        for g in &component_type.compiled_globals {
-            crate::global_component::instantiate(g, &mut globals, window_adapter);
-        }
-        let extra_data = component_type.extra_data_offset.apply_mut(instance.as_mut());
-        extra_data.globals = globals;
-
-        extra_data.embedded_file_resources = component_type
-            .original
-            .embedded_file_resources
-            .borrow()
-            .iter()
-            .map(|(path, er)| (er.id, path.clone()))
-            .collect();
-    }
-    *component_type.window_adapter_offset.apply_mut(instance.as_mut()) =
-        Some(window_adapter.clone());
+    let instance = component_type.dynamic_type.clone().create_instance();
 
     let component_box = ComponentBox { instance, component_type: component_type.clone() };
-    let instance_ref = component_box.borrow_instance();
-
-    if !component_type.original.is_global() {
-        i_slint_core::component::register_component(
-            instance_ref.instance,
-            instance_ref.component_type.item_array.as_slice(),
-            eval::window_adapter_ref(instance_ref).unwrap(),
-        );
-    }
 
     let self_rc = vtable::VRc::new(ErasedComponentBox::from(component_box));
     let self_weak = vtable::VRc::downgrade(&self_rc);
@@ -1247,10 +1273,76 @@ pub fn instantiate(
     instance_ref.self_weak().set(self_weak.clone()).ok();
     let component_type = comp.description();
 
+    let root = root
+        .or_else(|| instance_ref.parent_instance().map(|parent| parent.root_weak().clone()))
+        .unwrap_or_else(|| self_weak.clone());
+    component_type.root_offset.apply(instance_ref.as_ref()).set(root).ok().unwrap();
+
+    if !component_type.original.is_global() {
+        let maybe_window_adapter =
+            if let Some(WindowOptions::UseExistingWindow(adapter)) = window_options.as_ref() {
+                Some(adapter.clone())
+            } else {
+                instance_ref.maybe_window_adapter()
+            };
+
+        let component_rc = vtable::VRc::into_dyn(self_rc.clone());
+        i_slint_core::component::register_component(&component_rc, maybe_window_adapter);
+    }
+
+    if let Some(parent) = parent_ctx {
+        component_type
+            .parent_component_offset
+            .unwrap()
+            .apply(instance_ref.as_ref())
+            .set(parent)
+            .ok()
+            .unwrap();
+    } else {
+        for g in &component_type.compiled_globals {
+            crate::global_component::instantiate(g, &mut globals, self_weak.clone());
+        }
+        let extra_data = component_type.extra_data_offset.apply(instance_ref.as_ref());
+        extra_data.globals.set(globals).ok().unwrap();
+
+        extra_data
+            .embedded_file_resources
+            .set(
+                component_type
+                    .original
+                    .embedded_file_resources
+                    .borrow()
+                    .iter()
+                    .map(|(path, er)| (er.id, path.clone()))
+                    .collect(),
+            )
+            .ok()
+            .unwrap();
+
+        #[cfg(target_arch = "wasm32")]
+        if let Some(WindowOptions::CreateWithCanvasId(canvas_id)) = window_options {
+            extra_data.canvas_id.set(canvas_id.clone()).unwrap();
+        }
+    }
+
+    match &window_options {
+        Some(WindowOptions::UseExistingWindow(existing_adapter)) => {
+            component_type
+                .window_adapter_offset
+                .apply(instance_ref.as_ref())
+                .set(existing_adapter.clone())
+                .ok()
+                .unwrap();
+        }
+        _ => {}
+    }
+
     // Some properties are generated as Value, but for which the default constructed Value must be initialized
     for (prop_name, decl) in &component_type.original.root_element.borrow().property_declarations {
-        if !matches!(decl.property_type, Type::Struct { .. } | Type::Array(_))
-            || decl.is_alias.is_some()
+        if !matches!(
+            decl.property_type,
+            Type::Struct { .. } | Type::Array(_) | Type::Enumeration(_)
+        ) || decl.is_alias.is_some()
         {
             continue;
         }
@@ -1452,8 +1544,8 @@ impl ErasedComponentBox {
         self.0.borrow()
     }
 
-    pub fn window_adapter(&self) -> &Rc<dyn WindowAdapter> {
-        self.0.window_adapter()
+    pub fn window_adapter_ref(&self) -> Result<&WindowAdapterRc, PlatformError> {
+        self.0.window_adapter_ref()
     }
 
     pub fn run_setup_code(&self) {
@@ -1499,7 +1591,7 @@ extern "C" fn layout_info(component: ComponentRefPin, orientation: Orientation) 
     let mut result = crate::eval_layout::get_layout_info(
         &instance_ref.component_type.original.root_element,
         instance_ref,
-        eval::window_adapter_ref(instance_ref).unwrap(),
+        &instance_ref.window_adapter(),
         orientation,
     );
 
@@ -1538,11 +1630,21 @@ unsafe extern "C" fn get_item_ref(component: ComponentRefPin, index: usize) -> P
 extern "C" fn get_subtree_range(component: ComponentRefPin, index: usize) -> IndexRange {
     generativity::make_guard!(guard);
     let instance_ref = unsafe { InstanceRef::from_pin_ref(component, guard) };
-    let rep_in_comp = unsafe { instance_ref.component_type.repeater[index].get_untagged() };
-    ensure_repeater_updated(instance_ref, rep_in_comp);
+    if let Some(container_index) = ComponentContainerIndex::try_from_repeater_index(index) {
+        let container = component.as_ref().get_item_ref(container_index.as_item_tree_index());
+        let container = i_slint_core::items::ItemRef::downcast_pin::<
+            i_slint_core::items::ComponentContainer,
+        >(container)
+        .unwrap();
+        container.ensure_updated();
+        container.subtree_range()
+    } else {
+        let rep_in_comp = unsafe { instance_ref.component_type.repeater[index].get_untagged() };
+        ensure_repeater_updated(instance_ref, rep_in_comp);
 
-    let repeater = rep_in_comp.offset.apply(&instance_ref.instance);
-    repeater.range().into()
+        let repeater = rep_in_comp.offset.apply(&instance_ref.instance);
+        repeater.range().into()
+    }
 }
 
 extern "C" fn get_subtree_component(
@@ -1553,13 +1655,23 @@ extern "C" fn get_subtree_component(
 ) {
     generativity::make_guard!(guard);
     let instance_ref = unsafe { InstanceRef::from_pin_ref(component, guard) };
-    let rep_in_comp = unsafe { instance_ref.component_type.repeater[index].get_untagged() };
-    ensure_repeater_updated(instance_ref, rep_in_comp);
+    if let Some(container_index) = ComponentContainerIndex::try_from_repeater_index(index) {
+        let container = component.as_ref().get_item_ref(container_index.as_item_tree_index());
+        let container = i_slint_core::items::ItemRef::downcast_pin::<
+            i_slint_core::items::ComponentContainer,
+        >(container)
+        .unwrap();
+        container.ensure_updated();
+        *result = container.subtree_component();
+    } else {
+        let rep_in_comp = unsafe { instance_ref.component_type.repeater[index].get_untagged() };
+        ensure_repeater_updated(instance_ref, rep_in_comp);
 
-    let repeater = rep_in_comp.offset.apply(&instance_ref.instance);
-    *result = vtable::VRc::downgrade(&vtable::VRc::into_dyn(
-        repeater.component_at(subtree_index).unwrap(),
-    ))
+        let repeater = rep_in_comp.offset.apply(&instance_ref.instance);
+        *result = vtable::VRc::downgrade(&vtable::VRc::into_dyn(
+            repeater.component_at(subtree_index).unwrap(),
+        ))
+    }
 }
 
 extern "C" fn get_item_tree(component: ComponentRefPin) -> Slice<ItemTreeNode> {
@@ -1582,23 +1694,66 @@ extern "C" fn subtree_index(component: ComponentRefPin) -> usize {
 unsafe extern "C" fn parent_node(component: ComponentRefPin, result: &mut ItemWeak) {
     generativity::make_guard!(guard);
     let instance_ref = InstanceRef::from_pin_ref(component, guard);
-    let parent_item_index = instance_ref
-        .component_type
-        .original
-        .parent_element
-        .upgrade()
-        .and_then(|e| e.borrow().item_index.get().cloned());
-    if let (Some(parent_offset), Some(parent_index)) =
-        (instance_ref.component_type.parent_component_offset, parent_item_index)
-    {
-        if let Some(parent) = parent_offset.apply(instance_ref.as_ref()) {
-            generativity::make_guard!(new_guard);
-            let parent_instance = InstanceRef::from_pin_ref(*parent, new_guard);
-            let parent_rc =
-                parent_instance.self_weak().get().unwrap().clone().into_dyn().upgrade().unwrap();
-            *result = ItemRc::new(parent_rc, parent_index).downgrade();
-        };
+
+    let component_and_index = {
+        // Normal inner-compilation unit case:
+        if let Some(parent_offset) = instance_ref.component_type.parent_component_offset {
+            let parent_item_index = instance_ref
+                .component_type
+                .original
+                .parent_element
+                .upgrade()
+                .and_then(|e| e.borrow().item_index.get().cloned())
+                .unwrap_or(usize::MAX);
+            let parent_component = parent_offset.apply(instance_ref.as_ref()).get().map(|prp| {
+                generativity::make_guard!(new_guard);
+                let instance = InstanceRef::from_pin_ref(*prp, new_guard);
+                instance.self_weak().get().unwrap().clone().into_dyn().upgrade().unwrap()
+            });
+            (parent_component, parent_item_index)
+        } else if let Some((parent_component, parent_index)) = instance_ref
+            .component_type
+            .extra_data_offset
+            .apply(instance_ref.as_ref())
+            .embedding_position
+            .get()
+        {
+            (parent_component.upgrade(), *parent_index)
+        } else {
+            (None, usize::MAX)
+        }
+    };
+
+    if let (Some(component), index) = component_and_index {
+        *result = ItemRc::new(component, index).downgrade();
     }
+}
+
+unsafe extern "C" fn embed_component(
+    component: ComponentRefPin,
+    parent_component: &ComponentWeak,
+    parent_item_tree_index: usize,
+) -> bool {
+    generativity::make_guard!(guard);
+    let instance_ref = unsafe { InstanceRef::from_pin_ref(component, guard) };
+
+    if instance_ref.component_type.parent_component_offset.is_some() {
+        // We are not the root of the compilation unit tree... Can not embed this!
+        return false;
+    }
+
+    {
+        // sanity check parent:
+        let prc = parent_component.upgrade().unwrap();
+        let pref = vtable::VRc::borrow_pin(&prc);
+        let it = pref.as_ref().get_item_tree();
+        if !matches!(it.get(parent_item_tree_index), Some(ItemTreeNode::DynamicTree { .. })) {
+            panic!("Trying to embed into a non-dynamic index in the parents item tree")
+        }
+    }
+
+    let extra_data = instance_ref.component_type.extra_data_offset.apply(instance_ref.as_ref());
+    extra_data.embedding_position.set((parent_component.clone(), parent_item_tree_index)).is_ok()
 }
 
 extern "C" fn accessible_role(component: ComponentRefPin, item_index: usize) -> AccessibleRole {
@@ -1618,6 +1773,7 @@ extern "C" fn accessible_role(component: ComponentRefPin, item_index: usize) -> 
         None => AccessibleRole::default(),
     }
 }
+
 extern "C" fn accessible_string_property(
     component: ComponentRefPin,
     item_index: usize,
@@ -1641,6 +1797,20 @@ extern "C" fn accessible_string_property(
             Value::Number(x) => *result = x.to_string().into(),
             _ => unimplemented!("invalid type for accessible_string_property"),
         };
+    }
+}
+
+extern "C" fn window_adapter(
+    component: ComponentRefPin,
+    do_create: bool,
+    result: &mut Option<WindowAdapterRc>,
+) {
+    generativity::make_guard!(guard);
+    let instance_ref = unsafe { InstanceRef::from_pin_ref(component, guard) };
+    if do_create {
+        *result = Some(instance_ref.window_adapter());
+    } else {
+        *result = instance_ref.maybe_window_adapter();
     }
 }
 
@@ -1679,7 +1849,7 @@ impl<'a, 'id> InstanceRef<'a, 'id> {
     }
 
     pub fn as_ref(&self) -> &Instance<'id> {
-        &*self.instance
+        &self.instance
     }
 
     /// Borrow this component as a `Pin<ComponentRef>`
@@ -1692,20 +1862,97 @@ impl<'a, 'id> InstanceRef<'a, 'id> {
         }
     }
 
-    pub fn self_weak(
-        &self,
-    ) -> &once_cell::unsync::OnceCell<vtable::VWeak<ComponentVTable, ErasedComponentBox>> {
+    pub fn self_weak(&self) -> &OnceCell<vtable::VWeak<ComponentVTable, ErasedComponentBox>> {
         let extra_data = self.component_type.extra_data_offset.apply(self.as_ref());
         &extra_data.self_weak
     }
 
-    pub fn window_adapter(&self) -> &Rc<dyn WindowAdapter> {
-        self.component_type.window_adapter_offset.apply(self.as_ref()).as_ref().as_ref().unwrap()
+    pub fn root_weak(&self) -> &vtable::VWeak<ComponentVTable, ErasedComponentBox> {
+        self.component_type.root_offset.apply(self.as_ref()).get().unwrap()
+    }
+
+    pub fn window_adapter(&self) -> WindowAdapterRc {
+        let root_weak = vtable::VWeak::into_dyn(self.root_weak().clone());
+        let root = self.root_weak().upgrade().unwrap();
+        generativity::make_guard!(guard);
+        let comp = root.unerase(guard);
+        Self::get_or_init_window_adapter_ref(
+            &comp.component_type,
+            root_weak,
+            true,
+            comp.instance.as_pin_ref().get_ref(),
+        )
+        .unwrap()
+        .clone()
+    }
+
+    pub fn get_or_init_window_adapter_ref<'b, 'id2>(
+        component_type: &'b ComponentDescription<'id2>,
+        root_weak: ComponentWeak,
+        do_create: bool,
+        instance: &'b Instance<'id2>,
+    ) -> Result<&'b WindowAdapterRc, PlatformError> {
+        // We are the actual root: Generate and store a window_adapter if necessary
+        component_type.window_adapter_offset.apply(instance).get_or_try_init(|| {
+            let mut parent_node = ItemWeak::default();
+            if let Some(rc) = vtable::VWeak::upgrade(&root_weak) {
+                vtable::VRc::borrow_pin(&rc).as_ref().parent_node(&mut parent_node);
+            }
+
+            if let Some(parent) = parent_node.upgrade() {
+                // We are embedded: Get window adapter from our parent
+                let mut result = None;
+                vtable::VRc::borrow_pin(parent.component())
+                    .as_ref()
+                    .window_adapter(do_create, &mut result);
+                result.ok_or(PlatformError::NoPlatform)
+            } else if do_create {
+                let extra_data = component_type.extra_data_offset.apply(instance);
+                let window_adapter = // We are the root: Create a window adapter
+                    i_slint_backend_selector::with_platform(|_b| {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        return _b.create_window_adapter();
+                        #[cfg(target_arch = "wasm32")]
+                        i_slint_backend_winit::create_gl_window_with_canvas_id(
+                            extra_data.canvas_id.get().map_or("canvas", |s| s.as_str()),
+                        )
+                    })?;
+
+                let comp_rc = extra_data.self_weak.get().unwrap().upgrade().unwrap();
+                WindowInner::from_pub(window_adapter.window())
+                    .set_component(&vtable::VRc::into_dyn(comp_rc));
+                Ok(window_adapter)
+            } else {
+                Err(PlatformError::NoPlatform)
+            }
+        })
+    }
+
+    pub fn maybe_window_adapter(&self) -> Option<WindowAdapterRc> {
+        let root_weak = vtable::VWeak::into_dyn(self.root_weak().clone());
+        let root = self.root_weak().upgrade()?;
+        generativity::make_guard!(guard);
+        let comp = root.unerase(guard);
+        Self::get_or_init_window_adapter_ref(
+            &comp.component_type,
+            root_weak,
+            false,
+            comp.instance.as_pin_ref().get_ref(),
+        )
+        .ok()
+        .cloned()
+    }
+
+    pub fn access_window<R>(
+        self,
+        callback: impl FnOnce(&'_ i_slint_core::window::WindowInner) -> R,
+    ) -> R {
+        callback(WindowInner::from_pub(self.window_adapter().window()))
     }
 
     pub fn parent_instance(&self) -> Option<InstanceRef<'a, 'id>> {
         if let Some(parent_offset) = self.component_type.parent_component_offset {
-            if let Some(parent) = parent_offset.apply(self.as_ref()) {
+            if let Some(parent) = parent_offset.apply(self.as_ref()).get() {
                 let parent_instance = unsafe {
                     Self {
                         instance: Pin::new_unchecked(
@@ -1735,18 +1982,26 @@ impl<'a, 'id> InstanceRef<'a, 'id> {
 pub fn show_popup(
     popup: &object_tree::PopupWindow,
     pos: i_slint_core::graphics::Point,
+    close_on_click: bool,
     parent_comp: ComponentRefPin,
-    parent_window_adapter: &Rc<dyn WindowAdapter>,
+    parent_window_adapter: WindowAdapterRc,
     parent_item: &ItemRc,
 ) {
     generativity::make_guard!(guard);
     // FIXME: we should compile once and keep the cached compiled component
     let compiled = generate_component(&popup.component, guard);
-    let inst = instantiate(compiled, Some(parent_comp), parent_window_adapter, Default::default());
+    let inst = instantiate(
+        compiled,
+        Some(parent_comp),
+        None,
+        Some(&WindowOptions::UseExistingWindow(parent_window_adapter.clone())),
+        Default::default(),
+    );
     inst.run_setup_code();
     WindowInner::from_pub(parent_window_adapter.window()).show_popup(
         &vtable::VRc::into_dyn(inst),
         pos,
+        close_on_click,
         parent_item,
     );
 }

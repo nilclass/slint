@@ -1,10 +1,12 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 /*!
  This module enable runtime type information for the builtin items and
  property so that the viewer can handle them
 */
+
+#![allow(clippy::result_unit_err)] // We have nothing better to report
 
 pub type FieldOffset<T, U> = const_field_offset::FieldOffset<T, U, const_field_offset::AllowPin>;
 use crate::items::PropertyAnimation;
@@ -41,6 +43,7 @@ macro_rules! declare_ValueType_2 {
             crate::graphics::Point,
             crate::items::PointerEvent,
             crate::lengths::LogicalLength,
+            crate::component_factory::ComponentFactory,
             $(crate::items::$Name,)*
         ];
     };

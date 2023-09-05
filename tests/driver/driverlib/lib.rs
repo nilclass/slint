@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 use regex::Regex;
 
@@ -14,8 +14,7 @@ impl TestCase {
         self.relative_path
             .with_extension("")
             .to_string_lossy()
-            .replace(std::path::MAIN_SEPARATOR, "_")
-            .replace('-', "_")
+            .replace([std::path::MAIN_SEPARATOR, '-'], "_")
     }
 }
 

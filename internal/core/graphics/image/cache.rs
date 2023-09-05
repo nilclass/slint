@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 /*!
 This module contains image and caching related types for the run-time library.
@@ -25,6 +25,8 @@ impl clru::WeightScale<ImageCacheKey, ImageInner> for ImageWeightInBytes {
             ImageInner::HTMLImage(_) => 512, // Something... the web browser maintainers its own cache. The purpose of this cache is to reduce the amount of DOM elements.
             ImageInner::StaticTextures(_) => 0,
             ImageInner::BackendStorage(x) => vtable::VRc::borrow(x).size().area() as usize,
+            #[cfg(not(target_arch = "wasm32"))]
+            ImageInner::BorrowedOpenGLTexture(..) => 0, // Assume storage in GPU memory
         }
     }
 }
@@ -80,18 +82,16 @@ impl ImageCache {
         });
         #[cfg(not(target_arch = "wasm32"))]
         return self.lookup_image_in_cache_or_create(cache_key, |cache_key| {
-            if cfg!(feature = "svg") {
-                if path.ends_with(".svg") || path.ends_with(".svgz") {
-                    return Some(ImageInner::Svg(vtable::VRc::new(
-                        super::svg::load_from_path(path, cache_key).map_or_else(
-                            |err| {
-                                eprintln!("Error loading SVG from {}: {}", &path, err);
-                                None
-                            },
-                            Some,
-                        )?,
-                    )));
-                }
+            if cfg!(feature = "svg") && (path.ends_with(".svg") || path.ends_with(".svgz")) {
+                return Some(ImageInner::Svg(vtable::VRc::new(
+                    super::svg::load_from_path(path, cache_key).map_or_else(
+                        |err| {
+                            eprintln!("Error loading SVG from {}: {}", &path, err);
+                            None
+                        },
+                        Some,
+                    )?,
+                )));
             }
 
             image::open(std::path::Path::new(&path.as_str())).map_or_else(

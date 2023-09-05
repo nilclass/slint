@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 //! Remove the rectangles that serves no purposes
 //!
@@ -40,7 +40,7 @@ pub fn optimize_useless_rectangles(root_component: &Rc<Component>) {
 /// Check that this is a element we can optimize
 fn can_optimize(elem: &ElementRc) -> bool {
     let e = elem.borrow();
-    if e.is_flickable_viewport || e.has_popup_child {
+    if e.is_flickable_viewport || e.has_popup_child || e.is_component_placeholder {
         return false;
     };
 

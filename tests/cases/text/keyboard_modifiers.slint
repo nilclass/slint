@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 TestCase := Window {
     width: 100phx;
@@ -191,12 +191,8 @@ assert_eq!(instance.get_meta_modifier(), false);
 
 // Pretend that Ctrl-something results in a loss of focus, so we never receive the "something" key,
 // but we observe a loss of focus.
-// TODO: create public API for window focus gain/loss
-let window_inner = slint::private_unstable_api::re_exports::WindowInner::from_pub(instance.window());
-window_inner.set_active(false);
-window_inner.set_focus(false);
-window_inner.set_active(true);
-window_inner.set_focus(true);
+instance.window().dispatch_event(slint::platform::WindowEvent::WindowActiveChanged(false));
+instance.window().dispatch_event(slint::platform::WindowEvent::WindowActiveChanged(true));
 
 slint_testing::send_keyboard_char(&instance, 'a', true);
 slint_testing::send_keyboard_char(&instance, 'a', false);

@@ -1,12 +1,12 @@
-# Copyright © SixtyFPS GmbH <info@slint-ui.com>
-# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+# Copyright © SixtyFPS GmbH <info@slint.dev>
+# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 [package]
 name = "slint-build"
-version = "1.0.3"
-authors = ["Slint Developers <info@slint-ui.com>"]
+version = "1.2.0"
+authors = ["Slint Developers <info@slint.dev>"]
 edition = "2021"
-license = "GPL-3.0-only OR LicenseRef-Slint-commercial"
+license = "GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial"
 description = "Helper for Slint build script"
 repository = "https://github.com/slint-ui/slint"
 homepage = "https://slint.rs"
@@ -19,7 +19,7 @@ path = "lib.rs"
 default = []
 
 [dependencies]
-i-slint-compiler = { version = "=1.0.3", path = "../../../internal/compiler", features = ["rust", "display-diagnostics", "software-renderer"] }
+i-slint-compiler = { version = "=1.2.0", path = "../../../internal/compiler", features = ["rust", "display-diagnostics", "software-renderer"] }
 
 spin_on = "0.1"
 thiserror = "1"

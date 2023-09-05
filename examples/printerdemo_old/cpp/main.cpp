@@ -1,7 +1,8 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: MIT
 
 #include "printerdemo.h"
+#include <iostream>
 
 struct InkLevelModel : slint::Model<InkLevel>
 {

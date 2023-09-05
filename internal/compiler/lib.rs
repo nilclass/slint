@@ -1,8 +1,8 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 #![doc = include_str!("README.md")]
-#![doc(html_logo_url = "https://slint-ui.com/logo/slint-logo-square-light.svg")]
+#![doc(html_logo_url = "https://slint.dev/logo/slint-logo-square-light.svg")]
 // It would be nice to keep the compiler free of unsafe code
 #![deny(unsafe_code)]
 
@@ -77,6 +77,12 @@ pub struct CompilerConfiguration {
 
     /// expose the accessible role and properties
     pub accessibility: bool,
+
+    /// Add support for component containers
+    pub enable_component_containers: bool,
+
+    /// The domain used as one of the parameter to the translate function
+    pub translation_domain: Option<String>,
 }
 
 impl CompilerConfiguration {
@@ -120,6 +126,11 @@ impl CompilerConfiguration {
             .filter(|f| *f > 0.)
             .unwrap_or(1.);
 
+        let enable_experimental_features =
+            std::env::var_os("SLINT_ENABLE_EXPERIMENTAL_FEATURES").is_some();
+
+        let enable_component_containers = enable_experimental_features;
+
         Self {
             embed_resources,
             include_paths: Default::default(),
@@ -128,6 +139,8 @@ impl CompilerConfiguration {
             inline_all_elements,
             scale_factor,
             accessibility: true,
+            enable_component_containers,
+            translation_domain: None,
         }
     }
 }
@@ -140,11 +153,16 @@ pub async fn compile_syntax_node(
     #[cfg(feature = "software-renderer")]
     if compiler_config.embed_resources == EmbedResourcesKind::EmbedTextures {
         // HACK: disable accessibility when compiling for the software renderer
-        // accessibility is not supported with backend that support sofware renderer anyway
+        // accessibility is not supported with backend that support software renderer anyway
         compiler_config.accessibility = false;
     }
 
-    let global_type_registry = typeregister::TypeRegister::builtin();
+    let global_type_registry = if compiler_config.enable_component_containers {
+        crate::typeregister::TypeRegister::builtin_experimental()
+    } else {
+        crate::typeregister::TypeRegister::builtin()
+    };
+
     let type_registry =
         Rc::new(RefCell::new(typeregister::TypeRegister::new(&global_type_registry)));
 
@@ -177,8 +195,10 @@ pub async fn compile_syntax_node(
     }
 
     if !diagnostics.has_error() {
-        // FIXME: ideally we would be able to run more passes, but currently we panic because invariant are not met.
         passes::run_passes(&doc, &mut diagnostics, &mut loader, &compiler_config).await;
+    } else {
+        // Don't run all the passes in case of errors because because some invariants are not met.
+        passes::run_import_passes(&doc, &mut loader, &mut diagnostics);
     }
 
     diagnostics.all_loaded_files = loader.all_files().cloned().collect();

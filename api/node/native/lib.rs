@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 use core::cell::RefCell;
 use i_slint_compiler::langtype::Type;
@@ -232,6 +232,7 @@ fn to_eval_value<'cx>(
         | Type::Function { .. }
         | Type::Model
         | Type::Callback { .. }
+        | Type::ComponentFactory { .. }
         | Type::Easing
         | Type::PathData
         | Type::LayoutCache
@@ -255,7 +256,8 @@ fn to_js_value<'cx>(
             &ImageInner::EmbeddedImage { .. }
             | &ImageInner::StaticTextures { .. }
             | &ImageInner::Svg(..)
-            | &ImageInner::BackendStorage(..) => JsNull::new().as_value(cx), // TODO: maybe pass around node buffers?
+            | &ImageInner::BackendStorage(..)
+            | &ImageInner::BorrowedOpenGLTexture(..) => JsNull::new().as_value(cx), // TODO: maybe pass around node buffers?
         },
         Value::Model(model) => {
             if let Some(js_model) = model.as_any().downcast_ref::<js_model::JsModel>() {
@@ -490,7 +492,7 @@ declare_types! {
             let this = cx.this();
             let window = cx.borrow(&this, |x| x.0.as_ref().cloned());
             let window_adapter = window.ok_or(()).or_else(|()| cx.throw_error("Invalid type"))?;
-            window_adapter.show().unwrap();
+            window_adapter.window().show().unwrap();
             Ok(JsUndefined::new().as_value(&mut cx))
         }
 
@@ -498,7 +500,7 @@ declare_types! {
             let this = cx.this();
             let window = cx.borrow(&this, |x| x.0.as_ref().cloned());
             let window_adapter = window.ok_or(()).or_else(|()| cx.throw_error("Invalid type"))?;
-            window_adapter.hide().unwrap();
+            window_adapter.window().hide().unwrap();
             Ok(JsUndefined::new().as_value(&mut cx))
         }
 
@@ -513,7 +515,7 @@ declare_types! {
             let this = cx.this();
             let window = cx.borrow(&this, |x| x.0.as_ref().cloned());
             let window_adapter = window.ok_or(()).or_else(|()| cx.throw_error("Invalid type"))?;
-            let pos = window_adapter.position().to_logical(window_adapter.window().scale_factor());
+            let pos = window_adapter.position().unwrap_or_default().to_logical(window_adapter.window().scale_factor());
 
             let point_object = JsObject::new(&mut cx);
             let x_value = JsNumber::new(&mut cx, pos.x).as_value(&mut cx);
@@ -527,7 +529,7 @@ declare_types! {
             let this = cx.this();
             let window = cx.borrow(&this, |x| x.0.as_ref().cloned());
             let window_adapter = window.ok_or(()).or_else(|()| cx.throw_error("Invalid type"))?;
-            let pos = window_adapter.position();
+            let pos = window_adapter.position().unwrap_or_default();
 
             let point_object = JsObject::new(&mut cx);
             let x_value = JsNumber::new(&mut cx, pos.x).as_value(&mut cx);

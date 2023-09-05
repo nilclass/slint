@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 #[cfg(feature = "software-renderer")]
 pub use resvg::tiny_skia::IntRect as Rect;
@@ -79,6 +79,8 @@ pub struct BitmapFont {
     pub ascent: f32,
     pub descent: f32,
     pub glyphs: Vec<BitmapGlyphs>,
+    pub weight: u16,
+    pub italic: bool,
 }
 
 #[derive(Debug, Clone)]

@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 //! This module contains the code for the highlight of some elements
 
@@ -33,7 +33,7 @@ const DESIGN_MODE_PROP: &str = "$designMode";
 fn next_item(item: &ItemRc) -> ItemRc {
     // We have a sibling, so find the "deepest first_child"
     if let Some(s) = item.next_sibling() {
-        return next_item_down(&s);
+        next_item_down(&s)
     } else if let Some(p) = item.parent_item() {
         // Walk further up the tree once out of siblings...
         p
@@ -46,9 +46,9 @@ fn next_item(item: &ItemRc) -> ItemRc {
 
 fn next_item_down(item: &ItemRc) -> ItemRc {
     if let Some(child) = item.first_child() {
-        return next_item_down(&child);
+        next_item_down(&child)
     } else {
-        return item.clone();
+        item.clone()
     }
 }
 
@@ -114,7 +114,7 @@ fn item_contains(item: &ItemRc, position: &LogicalPoint) -> bool {
 
 pub fn on_element_selected(
     component_instance: &DynamicComponentVRc,
-    callback: Box<dyn Fn(&str, u32, u32, u32, u32) -> ()>,
+    callback: Box<dyn Fn(&str, u32, u32, u32, u32)>,
 ) {
     generativity::make_guard!(guard);
     let c = component_instance.unerase(guard);
@@ -138,11 +138,12 @@ pub fn on_element_selected(
 
             let start_item = find_start_item(&state, &c, &position);
 
-            let mut i = start_item.clone();
+            let stop_at_item = start_item.clone();
+            let mut i = start_item;
             let (f, sl, sc, el, ec) = loop {
                 i = next_item(&i);
 
-                if i == start_item {
+                if i == stop_at_item {
                     // Break out: We went round once.
                     break (String::new(), 0, 0, 0, 0);
                 }
@@ -154,19 +155,19 @@ pub fn on_element_selected(
                 state.borrow_mut().current_item = Some(i.downgrade());
 
                 let component = i.component();
-                let component_ref = VRc::borrow(&component);
+                let component_ref = VRc::borrow(component);
                 let Some(component_box) = component_ref.downcast::<ErasedComponentBox>() else {
                     continue; // Skip components of unexpected type!
                 };
 
                 let Some((file, start_line, start_column, end_line, end_column)) =
                     element_providing_item(component_box, i.index())
-                    .and_then(|e| {
-                        highlight_elements(&c, vec![Rc::downgrade(&e)]);
-                        find_element_range(&e)
-                    }).map(|(sf, r)| {
-                        map_range_to_line(sf, r)
-                    }) else {
+                        .and_then(|e| {
+                            highlight_elements(&c, vec![Rc::downgrade(&e)]);
+                            find_element_range(&e)
+                        })
+                        .map(|(sf, r)| map_range_to_line(sf, r))
+                else {
                     continue; // Skip any Item not part of an element with a node attached
                 };
 
@@ -178,7 +179,7 @@ pub fn on_element_selected(
             };
 
             callback(&f, sl, sc, el, ec);
-            return Value::Void;
+            Value::Void
         }),
     );
 }
@@ -315,10 +316,9 @@ fn find_element_at_offset(component: &Rc<Component>, path: PathBuf, offset: u32)
 fn repeater_path(elem: &ElementRc) -> Option<Vec<String>> {
     let enclosing = elem.borrow().enclosing_component.upgrade().unwrap();
     if let Some(parent) = enclosing.parent_element.upgrade() {
-        if parent.borrow().repeated.is_none() {
-            // This is not a repeater, it might be a popup menu which is not supported ATM
-            return None;
-        }
+        // This is not a repeater, it might be a popup menu which is not supported ATM
+        parent.borrow().repeated.as_ref()?;
+
         let mut r = repeater_path(&parent)?;
         r.push(parent.borrow().id.clone());
         Some(r)
@@ -355,6 +355,7 @@ fn add_highlight_items(doc: &Document) {
                         .collect(),
                     name: None,
                     node: None,
+                    rust_attributes: None,
                 }
                 .into(),
             ),
@@ -550,12 +551,14 @@ fn add_current_item_callback(doc: &Document) {
             Expression::FunctionCall {
                 function: Box::new(Expression::CallbackReference(callback_prop, None)),
                 arguments: vec![
-                    Expression::PropertyReference(
-                        NamedReference::new(&element.clone(), "pressed-x").into(),
-                    ),
-                    Expression::PropertyReference(
-                        NamedReference::new(&element.clone(), "pressed-y").into(),
-                    ),
+                    Expression::PropertyReference(NamedReference::new(
+                        &element.clone(),
+                        "pressed-x",
+                    )),
+                    Expression::PropertyReference(NamedReference::new(
+                        &element.clone(),
+                        "pressed-y",
+                    )),
                 ],
                 source_location: None,
             }

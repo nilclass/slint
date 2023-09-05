@@ -1,0 +1,21 @@
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: MIT
+
+import {Button, AboutSlint, LineEdit } from "std-widgets.slint";
+
+export component App inherits Window {
+    preferred-width: 800px;
+    preferred-height: 600px;
+    property <int> count;
+
+    VerticalLayout {
+        AboutSlint {  }
+        Button {
+            text: "Hello";
+            clicked => { count += 1; }
+        }
+        Text { text: count; }
+        LineEdit {}
+        Rectangle {  }
+    }
+}

@@ -1,11 +1,11 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: MIT
 
 use alloc::boxed::Box;
 use alloc::rc::Rc;
 use core::cell::RefCell;
 use display_interface_spi::SPIInterfaceNoCS;
-use embedded_graphics::geometry::OriginDimensions;
+use embedded_graphics_core::geometry::OriginDimensions;
 use embedded_hal::digital::v2::OutputPin;
 use esp32s3_hal::{
     clock::{ClockControl, CpuClock},
@@ -62,9 +62,11 @@ impl slint::platform::Platform for EspBackend {
         let clocks = ClockControl::configure(system.clock_control, CpuClock::Clock240MHz).freeze();
 
         let mut rtc = Rtc::new(peripherals.RTC_CNTL);
-        let timer_group0 = TimerGroup::new(peripherals.TIMG0, &clocks);
+        let timer_group0 =
+            TimerGroup::new(peripherals.TIMG0, &clocks, &mut system.peripheral_clock_control);
         let mut wdt0 = timer_group0.wdt;
-        let timer_group1 = TimerGroup::new(peripherals.TIMG1, &clocks);
+        let timer_group1 =
+            TimerGroup::new(peripherals.TIMG1, &clocks, &mut system.peripheral_clock_control);
         let mut wdt1 = timer_group1.wdt;
 
         rtc.rwdt.disable();
@@ -198,9 +200,8 @@ struct DrawBuffer<'a, Display> {
 impl<
         DI: display_interface::WriteOnlyDataCommand,
         RST: OutputPin<Error = core::convert::Infallible>,
-        MODEL: mipidsi::models::Model<ColorFormat = embedded_graphics::pixelcolor::Rgb565>,
     > slint::platform::software_renderer::LineBufferProvider
-    for &mut DrawBuffer<'_, Display<DI, MODEL, RST>>
+    for &mut DrawBuffer<'_, Display<DI, mipidsi::models::ILI9342CRgb565, RST>>
 {
     type TargetPixel = slint::platform::software_renderer::Rgb565Pixel;
 
@@ -221,34 +222,10 @@ impl<
                 line as _,
                 range.end as u16,
                 line as u16,
-                buffer.iter().map(|x| embedded_graphics::pixelcolor::raw::RawU16::new(x.0).into()),
+                buffer
+                    .iter()
+                    .map(|x| embedded_graphics_core::pixelcolor::raw::RawU16::new(x.0).into()),
             )
             .unwrap();
     }
-}
-
-// FIXME: implement properly upstream
-#[no_mangle]
-extern "C" fn fmaxf(a: f32, b: f32) -> f32 {
-    if a > b {
-        a
-    } else {
-        b
-    }
-}
-#[no_mangle]
-extern "C" fn fminf(a: f32, b: f32) -> f32 {
-    if a < b {
-        a
-    } else {
-        b
-    }
-}
-#[no_mangle]
-extern "C" fn fmodf(a: f32, b: f32) -> f32 {
-    ((a as u32) % (b as u32)) as f32
-}
-#[no_mangle]
-extern "C" fn fmod(a: f64, b: f64) -> f64 {
-    ((a as u32) % (b as u32)) as f64
 }

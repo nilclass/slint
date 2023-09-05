@@ -4,10 +4,10 @@
 -->
 <script type="module">
     "use strict";
-    //import * as slint from 'https://slint-ui.com/releases/0.x.0/wasm-interpreter/slint_wasm_interpreter.js';
-    //const editor_url = "https://slint-ui.com/releases/0.x.0/editor/";
-    import * as slint from 'https://slint-ui.com/snapshots/master/wasm-interpreter/slint_wasm_interpreter.js';
-    const editor_url = "https://slint-ui.com/snapshots/master/editor/";
+    //import * as slint from 'https://slint.dev/releases/0.x.0/wasm-interpreter/slint_wasm_interpreter.js';
+    //const editor_url = "https://slint.dev/releases/0.x.0/editor/";
+    import * as slint from 'https://slint.dev/snapshots/master/wasm-interpreter/slint_wasm_interpreter.js';
+    const editor_url = "https://slint.dev/snapshots/master/editor/";
     // keep them alive
     var all_instances = new Array;
 
@@ -25,8 +25,8 @@
             div.innerHTML = "<pre style='color: red; background-color:#fee; margin:0'>" + p.innerHTML + "</pre>";
         }
         if (component !== undefined) {
-            let instance = component.create(canvas_id);
-            instance.show();
+            let instance = await component.create(canvas_id);
+            await instance.show();
             all_instances.push(instance);
         }
     }
@@ -39,11 +39,6 @@
     }
 
     function should_show_automatic_preview(element) {
-        // Safari blocks quite heavily when creating many WebGL contexts, slowing down loading of the docs
-        // significantly. For now, don't do automatic previews:
-        if (navigator.userAgent.indexOf('Safari') != -1 && navigator.userAgent.indexOf('Chrome') == -1) {
-            return false;
-        }
         // The `no-auto-preview` doesn't map directly to a dedicated class but it's mangled differently
         // between rustdoc and sphinx, so match fuzzy on the entire class list:
         return !element.className.includes("no-auto-preview");
@@ -81,13 +76,23 @@
 
     async function run() {
         await slint.default();
+
+        try {
+            slint.run_event_loop();
+            // this will trigger a JS exception, so this line will never be reached!
+        } catch (e) {
+            // The winit event loop, when targeting wasm, throws a JavaScript exception to break out of
+            // Rust without running any destructors. Don't rethrow the exception but swallow it, as
+            // this is no error and we truly want to resolve the promise of this function by returning
+            // the model markers.
+        }
+
         let selector = ["code.language-slint", ".rustdoc pre.language-slint", "div.highlight-slint div.highlight", "div.highlight-slint\\,no-auto-preview div.highlight"]
             .map((sel) => `${sel}:not([class*=slint\\,ignore]):not([class*=slint\\,no-preview])`).join(",");
         var elements = document.querySelectorAll(selector);
         for (var i = 0; i < elements.length; ++i) {
             await create_click_to_play_and_edit_buttons(elements[i]);
         }
-        slint.run_event_loop();
     }
     run();
 

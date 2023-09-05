@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 export X := Rectangle {
     property<brush> g1: @linear-gradient();
@@ -27,4 +27,6 @@ export X := Rectangle {
 
     property<brush> g14: @linear-gradient(-128deg, white, blue r);
 //                                                             ^error{Unknown unqualified identifier 'r'}
+    property <brush> g15: @linear-gradient(90deg, brown o, green); // #3241
+//                                                      ^error{Unknown unqualified identifier 'o'}
 }

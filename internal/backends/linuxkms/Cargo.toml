@@ -1,0 +1,42 @@
+# Copyright © SixtyFPS GmbH <info@slint.dev>
+# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+
+[package]
+name = "i-slint-backend-linuxkms"
+version = "1.2.0"
+authors = ["Slint Developers <info@slint-ui.com>"]
+edition = "2021"
+license = "GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial"
+description = "OpenGL rendering backend for Slint"
+repository = "https://github.com/slint-ui/slint"
+homepage = "https://slint.dev"
+rust-version.workspace = true
+
+[lib]
+path = "lib.rs"
+
+[features]
+renderer-skia = ["renderer-skia-vulkan", "renderer-skia-opengl"]
+renderer-skia-vulkan = ["i-slint-renderer-skia/vulkan", "vulkano"]
+renderer-skia-opengl = ["i-slint-renderer-skia/opengl", "drm", "gbm", "glutin", "raw-window-handle"]
+renderer-femtovg = ["i-slint-renderer-femtovg", "drm", "gbm", "glutin", "raw-window-handle"]
+
+#default = ["renderer-skia", "renderer-femtovg"]
+
+[dependencies]
+i-slint-core = { version = "=1.2.0", path = "../../../internal/core", features = ["image-decoders", "svg"] }
+i-slint-common = { version = "=1.2.0", path = "../../../internal/common" }
+i-slint-renderer-skia = { version = "=1.2.0", path = "../../renderers/skia", optional = true }
+i-slint-renderer-femtovg = { version = "=1.2.0", path = "../../renderers/femtovg", optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+input = { version = "0.8.2" }
+xkbcommon = { version = "0.6.0" }
+calloop = { version = "0.11.0" }
+libseat = { version = "0.2.1" }
+nix = { version = "0.27.0", features=["fs"] }
+vulkano = { version = "0.33.0", optional = true, default-features = false }
+drm = { version = "0.9.0", optional = true }
+gbm = { version = "0.12.0", optional = true, default-features = false, features = ["drm-support"] }
+glutin = { version = "0.30.8", optional = true, default-features = false, features = ["libloading", "egl"] }
+raw-window-handle = { version = "0.5.2", optional = true }

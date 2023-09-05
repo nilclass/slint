@@ -1,11 +1,11 @@
-# Copyright © SixtyFPS GmbH <info@slint-ui.com>
-# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+# Copyright © SixtyFPS GmbH <info@slint.dev>
+# SPDX-License-Identifier: MIT
 
 [package]
 name = "uefi-demo"
-version = "1.0.3"
+version = "1.2.0"
 edition = "2021"
-license = "GPL-3.0-only OR LicenseRef-Slint-commercial"
+license = "MIT"
 build = "build.rs"
 publish = false
 
@@ -18,7 +18,8 @@ uefi = "0.20.0"
 uefi-services = "0.17.0"
 
 slint = { path = "../../api/rs/slint", default-features = false, features = [
-    "compat-1-0",
+    "compat-1-2",
+    "renderer-software",
     "libm",
     "log",
     "unsafe-single-threaded",

@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 #![warn(missing_docs)]
 /*!
@@ -10,7 +10,6 @@
 use copypasta::ClipboardProvider;
 use corelib::items::PointerEventButton;
 use corelib::lengths::LogicalPoint;
-use corelib::lengths::LogicalSize;
 use corelib::SharedString;
 use i_slint_core as corelib;
 
@@ -18,8 +17,10 @@ use corelib::api::EventLoopError;
 use corelib::graphics::euclid;
 use corelib::input::{KeyEventType, KeyInputEvent, MouseEvent};
 use corelib::window::*;
-use std::cell::{Cell, RefCell, RefMut};
+use std::cell::{RefCell, RefMut};
 use std::rc::{Rc, Weak};
+
+use crate::winitwindowadapter::WinitWindowAdapter;
 
 use winit::event::WindowEvent;
 #[cfg(not(target_arch = "wasm32"))]
@@ -29,33 +30,6 @@ use crate::SlintUserEvent;
 
 pub(crate) static QUIT_ON_LAST_WINDOW_CLOSED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(true);
-
-pub trait WinitWindow: WindowAdapter {
-    fn currently_pressed_key_code(&self) -> &Cell<Option<winit::event::VirtualKeyCode>>;
-    /// Returns true if during the drawing request_redraw() was called.
-    fn draw(&self) -> Result<bool, i_slint_core::platform::PlatformError>;
-    fn with_window_handle(&self, callback: &mut dyn FnMut(&winit::window::Window));
-    fn winit_window(&self) -> Option<Rc<winit::window::Window>>;
-
-    /// Called by the event loop when a WindowEvent::Resized is received.
-    fn resize_event(
-        &self,
-        _size: winit::dpi::PhysicalSize<u32>,
-    ) -> Result<(), i_slint_core::platform::PlatformError> {
-        Ok(())
-    }
-
-    /// Return true if the proxy element used for input method has the focus
-    fn input_method_focused(&self) -> bool {
-        false
-    }
-    /// Returns true if request_redraw() was called since the last event loop iteration
-    /// and resets the state back to false.
-    fn take_pending_redraw(&self) -> bool;
-
-    /// Notify the window if the system theme has changed from light to dark mode
-    fn set_dark_color_scheme(&self, dark_mode: bool);
-}
 
 /// The Default, and the selection clippoard
 type ClipboardPair = (Box<dyn ClipboardProvider>, Box<dyn ClipboardProvider>);
@@ -68,7 +42,28 @@ struct NotRunningEventLoop {
 
 impl NotRunningEventLoop {
     fn new() -> Self {
-        let instance = winit::event_loop::EventLoopBuilder::with_user_event().build();
+        let mut builder = winit::event_loop::EventLoopBuilder::with_user_event();
+
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            #[cfg(feature = "wayland")]
+            {
+                use winit::platform::wayland::EventLoopBuilderExtWayland;
+                builder.with_any_thread(true);
+            }
+            #[cfg(feature = "x11")]
+            {
+                use winit::platform::x11::EventLoopBuilderExtX11;
+                builder.with_any_thread(true);
+            }
+        }
+        #[cfg(target_family = "windows")]
+        {
+            use winit::platform::windows::EventLoopBuilderExtWindows;
+            builder.with_any_thread(true);
+        }
+
+        let instance = builder.build();
         let event_loop_proxy = instance.create_proxy();
         let clipboard = RefCell::new(create_clipboard(&instance));
         Self { clipboard, instance, event_loop_proxy }
@@ -92,7 +87,7 @@ pub(crate) trait EventLoopInterface {
 
 impl EventLoopInterface for NotRunningEventLoop {
     fn event_loop_target(&self) -> &winit::event_loop::EventLoopWindowTarget<SlintUserEvent> {
-        &*self.instance
+        &self.instance
     }
 
     fn event_loop_proxy(&self) -> &winit::event_loop::EventLoopProxy<SlintUserEvent> {
@@ -141,7 +136,7 @@ impl<'a> EventLoopInterface for RunningEventLoop<'a> {
 }
 
 thread_local! {
-    static ALL_WINDOWS: RefCell<std::collections::HashMap<winit::window::WindowId, Weak<dyn WinitWindow>>> = RefCell::new(std::collections::HashMap::new());
+    static ALL_WINDOWS: RefCell<std::collections::HashMap<winit::window::WindowId, Weak<WinitWindowAdapter>>> = RefCell::new(std::collections::HashMap::new());
     static MAYBE_LOOP_INSTANCE: RefCell<Option<NotRunningEventLoop>> = RefCell::new(Some(NotRunningEventLoop::new()));
 }
 
@@ -207,7 +202,7 @@ pub(crate) fn with_window_target<T>(callback: impl FnOnce(&dyn EventLoopInterfac
     }
 }
 
-pub fn register_window(id: winit::window::WindowId, window: Rc<dyn WinitWindow>) {
+pub fn register_window(id: winit::window::WindowId, window: Rc<WinitWindowAdapter>) {
     ALL_WINDOWS.with(|windows| {
         windows.borrow_mut().insert(id, Rc::downgrade(&window));
     })
@@ -219,7 +214,7 @@ pub fn unregister_window(id: winit::window::WindowId) {
     });
 }
 
-fn window_by_id(id: winit::window::WindowId) -> Option<Rc<dyn WinitWindow>> {
+fn window_by_id(id: winit::window::WindowId) -> Option<Rc<WinitWindowAdapter>> {
     ALL_WINDOWS.with(|windows| windows.borrow().get(&id).and_then(|weakref| weakref.upgrade()))
 }
 
@@ -230,8 +225,6 @@ pub enum CustomEvent {
     /// so that the event loop can run
     #[cfg(target_arch = "wasm32")]
     WakeEventLoopWorkaround,
-    /// Slint internal: Request an update of window properties for the given window id.
-    UpdateWindowProperties(winit::window::WindowId),
     /// Slint internal: Invoke the
     UserEvent(Box<dyn FnOnce() + Send>),
     /// Sent from `WinitWindowAdapter::hide` so that we can check if we should quit the event loop
@@ -244,7 +237,6 @@ impl std::fmt::Debug for CustomEvent {
         match self {
             #[cfg(target_arch = "wasm32")]
             Self::WakeEventLoopWorkaround => write!(f, "WakeEventLoopWorkaround"),
-            Self::UpdateWindowProperties(e) => write!(f, "UpdateWindowProperties({:?})", e),
             Self::UserEvent(_) => write!(f, "UserEvent"),
             Self::WindowHidden => write!(f, "WindowHidden"),
             Self::Exit => write!(f, "Exit"),
@@ -254,7 +246,7 @@ impl std::fmt::Debug for CustomEvent {
 
 mod key_codes {
     macro_rules! winit_key_to_char_fn {
-        ($($char:literal # $name:ident # $($_qt:ident)|* # $($winit:ident)|* ;)*) => {
+        ($($char:literal # $name:ident # $($_qt:ident)|* # $($winit:ident)|* # $($_xkb:ident)|*;)*) => {
             pub fn winit_key_to_char(virtual_keycode: winit::event::VirtualKeyCode) -> Option<char> {
                 let char = match(virtual_keycode) {
                     $($(winit::event::VirtualKeyCode::$winit => $char,)*)*
@@ -268,7 +260,7 @@ mod key_codes {
 }
 
 fn process_window_event(
-    window: Rc<dyn WinitWindow>,
+    window: Rc<WinitWindowAdapter>,
     event: WindowEvent,
     cursor_pos: &mut LogicalPoint,
     pressed: &mut bool,
@@ -279,9 +271,7 @@ fn process_window_event(
             window.resize_event(size)?;
         }
         WindowEvent::CloseRequested => {
-            if runtime_window.request_close() {
-                window.hide()?;
-            }
+            window.window().dispatch_event(corelib::platform::WindowEvent::CloseRequested);
         }
         WindowEvent::ReceivedCharacter(ch) => {
             // On Windows, X11 and Wayland sequences like Ctrl+C will send a ReceivedCharacter after the pressed keyboard input event,
@@ -315,8 +305,9 @@ fn process_window_event(
             // We don't render popups as separate windows yet, so treat
             // focus to be the same as being active.
             if have_focus != runtime_window.active() {
-                runtime_window.set_active(have_focus);
-                runtime_window.set_focus(have_focus);
+                window.window().dispatch_event(
+                    corelib::platform::WindowEvent::WindowActiveChanged(have_focus),
+                );
             }
         }
         WindowEvent::KeyboardInput { ref input, .. } => {
@@ -330,7 +321,7 @@ fn process_window_event(
                 winit::event::VirtualKeyCode::LWin => winit::event::VirtualKeyCode::LControl,
                 #[cfg(target_os = "macos")]
                 winit::event::VirtualKeyCode::RWin => winit::event::VirtualKeyCode::RControl,
-                code @ _ => code,
+                code => code,
             });
             window.currently_pressed_key_code().set(match input.state {
                 winit::event::ElementState::Pressed => key_code,
@@ -355,7 +346,6 @@ fn process_window_event(
                 text: string.into(),
                 preedit_selection_start: preedit_selection.0,
                 preedit_selection_end: preedit_selection.1,
-                ..Default::default()
             };
             runtime_window.process_key_input(event);
         }
@@ -417,8 +407,7 @@ fn process_window_event(
             // https://github.com/slint-ui/slint/issues/2424: Work around winit reporting absolute coordinates for touch - until https://github.com/rust-windowing/winit/pull/2704 is merged & released.
             #[cfg(target_family = "wasm")]
             let location = {
-                let window_pos =
-                    window.winit_window().and_then(|w| w.inner_position().ok()).unwrap_or_default();
+                let window_pos = window.winit_window().inner_position().unwrap_or_default();
                 winit::dpi::PhysicalPosition::new(
                     location.x - window_pos.x as f64,
                     location.y - window_pos.y as f64,
@@ -449,9 +438,11 @@ fn process_window_event(
         }
         WindowEvent::ScaleFactorChanged { scale_factor, new_inner_size } => {
             if std::env::var("SLINT_SCALE_FACTOR").is_err() {
-                let size = new_inner_size.to_logical(scale_factor);
-                runtime_window.set_window_item_geometry(LogicalSize::new(size.width, size.height));
-                runtime_window.set_scale_factor(scale_factor as f32);
+                window.window().dispatch_event(
+                    corelib::platform::WindowEvent::ScaleFactorChanged {
+                        scale_factor: scale_factor as f32,
+                    },
+                );
                 // Resize the underlying graphics surface
                 window.resize_event(*new_inner_size)?;
             }
@@ -489,14 +480,6 @@ pub fn run() -> Result<(), corelib::platform::PlatformError> {
     let mut winit_loop = not_running_loop_instance.instance;
     let clipboard = not_running_loop_instance.clipboard;
 
-    // Applying the property values of the `Window` item in .slint files to the underlying winit Window
-    // may for example set the width but preserve the height of the window. Winit only knows the entire
-    // size, so we need to query the existing size via `inner_size()`. The timing of when to call `inner_size()`
-    // is important to avoid jitter as described in https://github.com/slint-ui/slint/issues/1269 . We want to
-    // process pending resize events first. That is why this vector collects the window ids of windows that
-    // we have scheduled for a sync between the `Window` item properties the the winit window, so that we
-    // apply them at `MainEventsCleared` time.
-    let mut windows_with_pending_property_updates = Vec::new();
     // With winit on Windows and with wasm, calling winit::Window::request_redraw() will not always deliver an
     // Event::RedrawRequested (for example when the mouse cursor is outside of the window). So when we get woken
     // up by the event loop to process new events from the operating system (NewEvents), we take note of all windows
@@ -517,8 +500,17 @@ pub fn run() -> Result<(), corelib::platform::PlatformError> {
         match event {
             Event::WindowEvent { event, window_id } => {
                 if let Some(window) = window_by_id(window_id) {
-                    *inner_event_loop_error.borrow_mut() =
-                        process_window_event(window, event, &mut cursor_pos, &mut pressed).err();
+                    #[cfg(not(enable_accesskit))]
+                    let process_event = true;
+                    #[cfg(enable_accesskit)]
+                    let process_event =
+                        window.accesskit_adapter.on_event(&window.winit_window(), &event);
+
+                    if process_event {
+                        *inner_event_loop_error.borrow_mut() =
+                            process_window_event(window, event, &mut cursor_pos, &mut pressed)
+                                .err();
+                    }
                 };
             }
 
@@ -543,18 +535,15 @@ pub fn run() -> Result<(), corelib::platform::PlatformError> {
                 }
             }
 
-            Event::UserEvent(SlintUserEvent::CustomEvent {
-                event: CustomEvent::UpdateWindowProperties(window_id),
-            }) => {
-                if let Err(insert_pos) =
-                    windows_with_pending_property_updates.binary_search(&window_id)
-                {
-                    windows_with_pending_property_updates.insert(insert_pos, window_id);
-                }
-            }
             Event::UserEvent(SlintUserEvent::CustomEvent { event: CustomEvent::WindowHidden }) => {
                 if QUIT_ON_LAST_WINDOW_CLOSED.load(std::sync::atomic::Ordering::Relaxed) {
-                    let window_count = ALL_WINDOWS.with(|windows| windows.borrow().len());
+                    let window_count = ALL_WINDOWS.with(|windows| {
+                        windows
+                            .borrow()
+                            .values()
+                            .filter(|window| window.upgrade().map_or(false, |w| w.is_shown()))
+                            .count()
+                    });
                     if window_count == 0 {
                         *control_flow = ControlFlow::Exit;
                     }
@@ -584,10 +573,9 @@ pub fn run() -> Result<(), corelib::platform::PlatformError> {
                 windows_with_pending_redraw_requests.clear();
                 ALL_WINDOWS.with(|windows| {
                     for (window_id, window_weak) in windows.borrow().iter() {
-                        if window_weak
-                            .upgrade()
-                            .map_or(false, |window| window.take_pending_redraw())
-                        {
+                        if window_weak.upgrade().map_or(false, |window| {
+                            window.is_shown() && window.take_pending_redraw()
+                        }) {
                             if let Err(insert_pos) =
                                 windows_with_pending_redraw_requests.binary_search(window_id)
                             {
@@ -600,19 +588,18 @@ pub fn run() -> Result<(), corelib::platform::PlatformError> {
                 corelib::platform::update_timers_and_animations();
             }
 
-            Event::MainEventsCleared => {
-                for window in
-                    windows_with_pending_property_updates.drain(..).filter_map(window_by_id)
-                {
-                    WindowInner::from_pub(window.window()).update_window_properties();
-                }
-            }
-
             Event::RedrawEventsCleared => {
                 if *control_flow != ControlFlow::Exit
                     && ALL_WINDOWS.with(|windows| {
                         windows.borrow().iter().any(|(_, w)| {
-                            w.upgrade().map_or(false, |w| w.window().has_active_animations())
+                            w.upgrade()
+                                .and_then(|w| {
+                                    w.window().has_active_animations().then(|| {
+                                        w.request_redraw();
+                                        true
+                                    })
+                                })
+                                .unwrap_or_default()
                         })
                     })
                 {

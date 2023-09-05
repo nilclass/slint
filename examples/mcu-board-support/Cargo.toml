@@ -1,16 +1,16 @@
-# Copyright © SixtyFPS GmbH <info@slint-ui.com>
-# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+# Copyright © SixtyFPS GmbH <info@slint.dev>
+# SPDX-License-Identifier: MIT
 
 [package]
 name = "mcu-board-support"
-version = "1.0.3"
-authors = ["Slint Developers <info@slint-ui.com>"]
+version = "1.2.0"
+authors = ["Slint Developers <info@slint.dev>"]
 edition = "2021"
-license = "GPL-3.0-only OR LicenseRef-Slint-commercial"
+license = "MIT"
 publish = false
 description = "Internal helper that includes support for different MCUs, for use in Slint examples"
 repository = "https://github.com/slint-ui/slint"
-homepage = "https://slint-ui.com"
+homepage = "https://slint.dev"
 links = "mcu_board_support" # just so we can pass metadata to the slint build crate
 
 [lib]
@@ -20,15 +20,15 @@ path = "lib.rs"
 pico-st7789 = ["slint/unsafe-single-threaded", "rp-pico", "embedded-hal", "cortex-m-rt", "embedded-alloc", "fugit", "cortex-m", "display-interface", "st7789", "defmt", "defmt-rtt", "shared-bus", "slint/libm", "embedded-dma", "embedded-graphics", "euclid/libm"]
 stm32h735g = ["slint/unsafe-single-threaded", "embedded-hal", "cortex-m/critical-section-single-core", "cortex-m-rt","embedded-alloc", "embedded-time", "cortex-m", "stm32h7xx-hal/stm32h735", "defmt", "defmt-rtt", "embedded-display-controller", "ft5336", "panic-probe", "slint/libm", "getrandom"]
 esp32-s2-kaluga-1 = ["slint/unsafe-single-threaded", "esp32s2-hal", "embedded-hal", "xtensa-lx-rt/esp32s2", "esp-alloc", "esp-println/esp32s2", "display-interface", "display-interface-spi", "st7789", "slint/libm"]
-esp32-s3-box = ["slint/unsafe-single-threaded", "esp32s3-hal", "embedded-hal", "xtensa-lx-rt/esp32s3", "esp-alloc", "esp-println/esp32s3", "esp-backtrace/esp32s3", "display-interface", "display-interface-spi", "mipidsi", "embedded-graphics", "slint/libm", "tt21100"]
+esp32-s3-box = ["slint/unsafe-single-threaded", "esp32s3-hal", "embedded-hal", "xtensa-lx-rt/esp32s3", "esp-alloc", "esp-println/esp32s3", "esp-backtrace/esp32s3", "display-interface", "display-interface-spi", "mipidsi", "embedded-graphics-core", "slint/libm", "tt21100"]
 
 [dependencies]
-slint = { version = "1.0.2", default-features = false, features = ["compat-1-0"] }
-i-slint-core-macros = { version = "1.0.2" }
+slint = { version = "1.2.0", default-features = false, features = ["compat-1-0"] }
+i-slint-core-macros = { version = "1.2.o" }
 
 derive_more = "0.99.5"
 embedded-graphics = { version = "0.7.1", optional = true }
-once_cell = { version = "1.9", default-features = false, features = ["alloc", "atomic-polyfill"] }
+once_cell = { version = "1.9", default-features = false, features = ["alloc"] }
 pin-weak = { version = "1", default-features = false }
 rgb = "0.8.27"
 cfg-if = "1"
@@ -42,27 +42,27 @@ embedded-dma = { version = "0.2.0", optional = true }
 # Use a git branch that has DMA support
 rp-pico = { version = "0.7.0", optional = true }
 fugit = { version = "0.3.6", optional = true }
-shared-bus = { version = "0.2", optional = true }
+shared-bus = { version = "0.3", optional = true }
 st7789 = { version = "0.7.0", optional = true }
 euclid = { version = "0.22", default-features = false, optional = true }
 
-stm32h7xx-hal = { version = "0.13.0", optional = true, features = ["log-rtt", "ltdc", "xspi"] }
+stm32h7xx-hal = { version = "0.14.0", optional = true, features = ["log-rtt", "ltdc", "xspi"] }
 getrandom = { version = "0.2", optional = true, default-features = false, features = ["custom"] }
 embedded-time = { version = "0.12.0", optional = true }
 embedded-display-controller = { version = "0.1.0", optional = true }
-# Use upstream git version to enable use of panic-probe (released version enforced panic-semihosting)
-ft5336 = { version = "0.1", git = "https://github.com/bobgates/ft5336", rev = "293730a225a68b6364857602f8fb62fd0beb8a26", optional = true }
+ft5336 = { version = "0.2", optional = true }
 
-esp32s2-hal = { version = "0.7", optional = true }
-esp32s3-hal = { version = "0.7", optional = true }
+esp32s2-hal = { version = "0.11", optional = true }
+esp32s3-hal = { version = "0.11", optional = true }
 xtensa-lx-rt = { version = "0.15", optional = true }
 display-interface-spi = { version = "0.4", optional = true }
-esp-alloc = { version = "0.2", optional = true, features = ["oom-handler"] }
-esp-println = { version = "0.4.0", optional = true }
-esp-backtrace = { version = "0.6.0", optional = true, features = ["panic-handler", "print-uart"] }
+esp-alloc = { version = "0.3", optional = true }
+esp-println = { version = "0.5.0", optional = true }
+esp-backtrace = { version = "0.7.0", optional = true, features = ["panic-handler", "print-uart"] }
 tt21100 = { version = "0.1", optional = true }
 
-mipidsi = { version = "0.6.0", optional = true }
+mipidsi = { version = "0.7.1", optional = true }
+embedded-graphics-core =  { version = "0.4", optional = true }
 
 defmt-rtt = { version = "0.4.0", optional = true }
 defmt = { version = "0.3.0", optional = true }

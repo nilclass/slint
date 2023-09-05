@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 TestCase := Window {
     width: 500phx;
@@ -99,9 +99,34 @@ assert!(instance.get_inner_ta_has_hover());
 assert_eq!(instance.get_clicked(), 0);
 // Release almost immediately
 instance.window().dispatch_event(WindowEvent::PointerReleased { position: LogicalPosition::new(178.0, 173.0), button: PointerEventButton::Left });
-//assert!(!instance.get_inner_ta_pressed());
+assert!(!instance.get_inner_ta_pressed());
 assert!(instance.get_inner_ta_has_hover());
 assert_eq!(instance.get_clicked(), 18_00013);
+assert_eq!(instance.get_offset_x(), 0.);
+assert_eq!(instance.get_offset_y(), 0.);
+
+instance.set_clicked(-1);
+
+slint_testing::mock_elapsed_time(1000);
+
+// - Press, move a triny, then release quickly:  should click
+// Start a press
+instance.window().dispatch_event(WindowEvent::PointerPressed { position: LogicalPosition::new(165.0, 175.0), button: PointerEventButton::Left });
+assert!(!instance.get_inner_ta_pressed());
+assert!(instance.get_inner_ta_has_hover());
+assert_eq!(instance.get_clicked(), -1);
+// make a small move
+instance.window().dispatch_event(WindowEvent::PointerMoved { position: LogicalPosition::new(166.0, 174.0) });
+assert!(!instance.get_inner_ta_pressed());
+assert!(instance.get_inner_ta_has_hover());
+slint_testing::mock_elapsed_time(30);
+instance.window().dispatch_event(WindowEvent::PointerMoved { position: LogicalPosition::new(167.0, 175.0) });
+assert!(!instance.get_inner_ta_pressed());
+// and release
+instance.window().dispatch_event(WindowEvent::PointerReleased { position: LogicalPosition::new(165.0, 174.0), button: PointerEventButton::Left });
+assert!(!instance.get_inner_ta_pressed());
+assert!(instance.get_inner_ta_has_hover());
+assert_eq!(instance.get_clicked(), 5_00014);
 assert_eq!(instance.get_offset_x(), 0.);
 assert_eq!(instance.get_offset_y(), 0.);
 
@@ -125,8 +150,8 @@ assert_eq!(instance.get_offset_y(), 0.);
 
 instance.window().dispatch_event(WindowEvent::PointerMoved { position: LogicalPosition::new(100.0, 120.0) });
 assert!(!instance.get_inner_ta_pressed()); // We should no longer be pressed
-//FIXME: we currently loose the has-hover when the flickable is flicking
-// assert!(instance.get_inner_ta_has_hover()); // We still have the mouse
+// no hover when the flickable is flicking
+assert!(!instance.get_inner_ta_has_hover());
 assert_eq!(instance.get_clicked(), -1); // not clicked
 assert_eq!(instance.get_offset_x(), 75.);
 assert_eq!(instance.get_offset_y(), 55.);
@@ -135,7 +160,7 @@ slint_testing::mock_elapsed_time(10000);
 
 instance.window().dispatch_event(WindowEvent::PointerReleased { position: LogicalPosition::new(100.0, 120.0), button: PointerEventButton::Left });
 assert!(!instance.get_inner_ta_pressed());
-//FIXME: assert!(instance.get_inner_ta_has_hover());
+assert!(instance.get_inner_ta_has_hover());
 assert_eq!(instance.get_clicked(), -1); // not clicked
 assert_eq!(instance.get_offset_x(), 75.);
 assert_eq!(instance.get_offset_y(), 55.);
@@ -144,7 +169,7 @@ instance.window().dispatch_event(WindowEvent::PointerMoved { position: LogicalPo
 slint_testing::mock_elapsed_time(1000);
 
 assert!(!instance.get_inner_ta_pressed());
-//FIXME: assert!(!instance.get_inner_ta_has_hover());
+assert!(!instance.get_inner_ta_has_hover());
 assert_eq!(instance.get_clicked(), -1);
 assert!((instance.get_offset_x() - 75.).abs() < 5.); // only small animation on release
 assert!((instance.get_offset_y() - 55.).abs() < 5.);

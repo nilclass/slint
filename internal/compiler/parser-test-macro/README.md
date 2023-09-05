@@ -1,3 +1,4 @@
+<!-- Copyright © SixtyFPS GmbH <info@slint.dev> ; SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial -->
 parser_test: a proc macro attribute that generate tests for the parser functions
 
 The parser_test macro will look at the documentation of a function for a
@@ -6,7 +7,7 @@ function, checking that no error are reported, and that everything was consumed
 
 A parser function must have the signature `fn(&mut impl Parser)`
 
-**NOTE**: This library is an **internal** crate of the [Slint project](https://slint-ui.com).
+**NOTE**: This library is an **internal** crate of the [Slint project](https://slint.dev).
 This crate should **not be used directly** by applications using Slint.
 You should use the `slint` crate instead.
 

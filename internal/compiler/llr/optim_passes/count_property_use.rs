@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 //! Passes that fills the Property::use_count
 //!
@@ -90,7 +90,7 @@ pub fn count_property_use(root: &PublicComponent) {
         sc.layout_info_v.borrow().visit_recursive(&mut |e| visit_expression(e, ctx));
 
         // 6. accessibility props
-        for (_, b) in &sc.accessible_prop {
+        for b in sc.accessible_prop.values() {
             b.borrow().visit_recursive(&mut |e| visit_expression(e, ctx))
         }
 

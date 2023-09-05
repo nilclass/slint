@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 //! Compute binding analysis and attempt to find binding loops
 
@@ -19,6 +19,7 @@ use crate::langtype::ElementType;
 use crate::layout::LayoutItem;
 use crate::layout::Orientation;
 use crate::namedreference::NamedReference;
+use crate::object_tree::find_parent_element;
 use crate::object_tree::Document;
 use crate::object_tree::PropertyAnimation;
 use crate::object_tree::{Component, ElementRc};
@@ -158,7 +159,7 @@ fn analyze_element(
             diag,
         );
     }
-    for (_, nr) in &elem.borrow().accessibility_props.0 {
+    for nr in elem.borrow().accessibility_props.0.values() {
         process_property(&PropertyPath::from(nr.clone()), context, reverse_aliases, diag);
     }
 
@@ -170,6 +171,23 @@ fn analyze_element(
                 });
             }
         }
+    }
+
+    if let Some(repeated) = &elem.borrow().repeated {
+        recurse_expression(&repeated.model, &mut |prop| {
+            process_property(prop, context, reverse_aliases, diag);
+        });
+        if let Some(lv) = &repeated.is_listview {
+            process_property(&lv.viewport_y.clone().into(), context, reverse_aliases, diag);
+            process_property(&lv.viewport_height.clone().into(), context, reverse_aliases, diag);
+            process_property(&lv.viewport_width.clone().into(), context, reverse_aliases, diag);
+            process_property(&lv.listview_height.clone().into(), context, reverse_aliases, diag);
+            process_property(&lv.listview_width.clone().into(), context, reverse_aliases, diag);
+        }
+    }
+    if let Some((h, v)) = &elem.borrow().layout_info_prop {
+        process_property(&h.clone().into(), context, reverse_aliases, diag);
+        process_property(&v.clone().into(), context, reverse_aliases, diag);
     }
 }
 
@@ -359,7 +377,9 @@ fn recurse_expression(expr: &Expression, vis: &mut impl FnMut(&PropertyPath)) {
         Expression::SolveLayout(l, o) | Expression::ComputeLayoutInfo(l, o) => {
             // we should only visit the layout geometry for the orientation
             if matches!(expr, Expression::SolveLayout(..)) {
-                l.rect().size_reference(*o).map(|nr| vis(&nr.clone().into()));
+                if let Some(nr) = l.rect().size_reference(*o) {
+                    vis(&nr.clone().into());
+                }
             }
             match l {
                 crate::layout::Layout::GridLayout(l) => {
@@ -374,12 +394,11 @@ fn recurse_expression(expr: &Expression, vis: &mut impl FnMut(&PropertyPath)) {
             g.rect = Default::default(); // already visited;
             g.visit_named_references(&mut |nr| vis(&nr.clone().into()))
         }
-        Expression::FunctionCall { function, arguments, .. } => {
-            if let Expression::BuiltinFunctionReference(
+        Expression::FunctionCall { function, arguments, .. } => match &**function {
+            Expression::BuiltinFunctionReference(
                 BuiltinFunction::ImplicitLayoutInfo(orientation),
                 _,
-            ) = &**function
-            {
+            ) => {
                 if let [Expression::ElementReference(item)] = arguments.as_slice() {
                     visit_implicit_layout_info_dependencies(
                         *orientation,
@@ -388,7 +407,18 @@ fn recurse_expression(expr: &Expression, vis: &mut impl FnMut(&PropertyPath)) {
                     );
                 }
             }
-        }
+            Expression::BuiltinFunctionReference(BuiltinFunction::ItemAbsolutePosition, _) => {
+                if let Some(Expression::ElementReference(item)) = arguments.first() {
+                    let mut item = item.upgrade().unwrap();
+                    while let Some(parent) = find_parent_element(&item) {
+                        item = parent;
+                        vis(&NamedReference::new(&item, "x").into());
+                        vis(&NamedReference::new(&item, "y").into());
+                    }
+                }
+            }
+            _ => {}
+        },
         _ => {}
     }
 }

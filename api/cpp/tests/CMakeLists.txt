@@ -1,5 +1,5 @@
-# Copyright © SixtyFPS GmbH <info@slint-ui.com>
-# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+# Copyright © SixtyFPS GmbH <info@slint.dev>
+# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 FetchContent_Declare(
     Catch2
@@ -19,12 +19,6 @@ macro(slint_test NAME)
     )
     add_test(NAME test_${NAME} COMMAND test_${NAME})
 
-    # Somehow the wrong relative rpath ends up in the binary, requiring us to change the
-    # working directory.
-    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        set_property(TEST test_${NAME} PROPERTY WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
-    endif()
-
     if(MSVC)
         target_compile_options(test_${NAME} PRIVATE /W3)
     else()
@@ -41,19 +35,18 @@ slint_test(datastructures)
 
 if(SLINT_FEATURE_INTERPRETER)
     slint_test(interpreter)
+    slint_test(window)
 endif()
 
 slint_test(properties)
-slint_test(eventloop)
-target_link_libraries(test_eventloop PRIVATE Threads::Threads)
+if(NOT SLINT_FEATURE_FREESTANDING)
+    slint_test(eventloop)
+    target_link_libraries(test_eventloop PRIVATE Threads::Threads)
+endif()
 slint_test(models)
-slint_test(window)
 
 add_subdirectory(multiple-includes)
 
-if(SLINT_FEATURE_EXPERIMENTAL)
-    if(Qt6_FOUND)
-        add_subdirectory(manual/platform_qt)
-    endif(Qt6_FOUND)
-    add_subdirectory(manual/platform_native)
-endif(SLINT_FEATURE_EXPERIMENTAL)
+slint_test(platform_eventloop)
+target_link_libraries(test_platform_eventloop PRIVATE Threads::Threads)
+

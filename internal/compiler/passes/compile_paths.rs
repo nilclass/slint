@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 //! This pass converts the verbose markup used for paths, such as
 //!    Path {
@@ -14,12 +14,14 @@ use crate::expression_tree::*;
 use crate::langtype::ElementType;
 use crate::langtype::Type;
 use crate::object_tree::*;
+use crate::EmbedResourcesKind;
 use std::cell::RefCell;
 use std::rc::Rc;
 
 pub fn compile_paths(
     component: &Rc<Component>,
     tr: &crate::typeregister::TypeRegister,
+    _embed_resources: EmbedResourcesKind,
     diag: &mut BuildDiagnostics,
 ) {
     let path_type = tr.lookup_element("Path").unwrap();
@@ -34,6 +36,14 @@ pub fn compile_paths(
             }
             _ => return,
         };
+
+        #[cfg(feature = "software-renderer")]
+        if _embed_resources == EmbedResourcesKind::EmbedTextures {
+            diag.push_warning(
+                "Path element is not supported with the software renderer".into(),
+                &*elem_.borrow(),
+            )
+        }
 
         let element_types = &accepted_type.additional_accepted_child_types;
 
@@ -139,6 +149,7 @@ fn compile_path_from_string_literal(
         .collect(),
         name: Some("Point".into()),
         node: None,
+        rust_attributes: None,
     };
 
     let mut points = Vec::new();

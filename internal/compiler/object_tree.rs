@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 /*!
  This module contains the intermediate representation of the code in the form of an object tree
@@ -7,11 +7,9 @@
 
 // cSpell: ignore qualname
 
-use itertools::Either;
-
 use crate::diagnostics::{BuildDiagnostics, SourceLocation, Spanned};
 use crate::expression_tree::{self, BindingExpression, Expression, Unit};
-use crate::langtype::{BuiltinElement, NativeClass, Type};
+use crate::langtype::{BuiltinElement, Enumeration, NativeClass, Type};
 use crate::langtype::{ElementType, PropertyLookupResult};
 use crate::layout::{LayoutConstraints, Orientation};
 use crate::namedreference::NamedReference;
@@ -19,9 +17,10 @@ use crate::parser;
 use crate::parser::{syntax_nodes, SyntaxKind, SyntaxNode};
 use crate::typeloader::ImportedTypes;
 use crate::typeregister::TypeRegister;
+use itertools::Either;
 use std::cell::{Cell, RefCell};
 use std::collections::btree_map::Entry;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Display;
 use std::rc::{Rc, Weak};
 
@@ -42,7 +41,7 @@ macro_rules! unwrap_or_continue {
 pub struct Document {
     pub node: Option<syntax_nodes::Document>,
     pub inner_components: Vec<Rc<Component>>,
-    pub inner_structs: Vec<Type>,
+    pub inner_types: Vec<Type>,
     pub root_component: Rc<Component>,
     pub local_registry: TypeRegister,
     /// A list of paths to .ttf/.ttc files that are supposed to be registered on
@@ -63,7 +62,7 @@ impl Document {
 
         let mut local_registry = TypeRegister::new(parent_registry);
         let mut inner_components = vec![];
-        let mut inner_structs = vec![];
+        let mut inner_types = vec![];
 
         let mut process_component =
             |n: syntax_nodes::Component,
@@ -73,26 +72,63 @@ impl Document {
                 local_registry.add(compo.clone());
                 inner_components.push(compo);
             };
-        let mut process_struct =
-            |n: syntax_nodes::StructDeclaration,
-             diag: &mut BuildDiagnostics,
-             local_registry: &mut TypeRegister| {
-                let mut ty = type_struct_from_node(n.ObjectType(), diag, local_registry);
-                if let Type::Struct { name, .. } = &mut ty {
-                    *name = parser::identifier_text(&n.DeclaredIdentifier());
-                } else {
-                    assert!(diag.has_error());
-                    return;
-                }
-                local_registry.insert_type(ty.clone());
-                inner_structs.push(ty);
+        let process_struct = |n: syntax_nodes::StructDeclaration,
+                              diag: &mut BuildDiagnostics,
+                              local_registry: &mut TypeRegister,
+                              inner_types: &mut Vec<Type>| {
+            let rust_attributes = n.AtRustAttr().map(|child| vec![child.text().to_string()]);
+            let mut ty =
+                type_struct_from_node(n.ObjectType(), diag, local_registry, rust_attributes);
+            if let Type::Struct { name, .. } = &mut ty {
+                *name = parser::identifier_text(&n.DeclaredIdentifier());
+            } else {
+                assert!(diag.has_error());
+                return;
+            }
+            local_registry.insert_type(ty.clone());
+            inner_types.push(ty);
+        };
+        let process_enum = |n: syntax_nodes::EnumDeclaration,
+                            diag: &mut BuildDiagnostics,
+                            local_registry: &mut TypeRegister,
+                            inner_types: &mut Vec<Type>| {
+            let Some(name) = parser::identifier_text(&n.DeclaredIdentifier()) else {
+                assert!(diag.has_error());
+                return;
             };
+            let mut existing_names = HashSet::new();
+            let values = n
+                .EnumValue()
+                .filter_map(|v| {
+                    let value = parser::identifier_text(&v)?;
+                    if value == name {
+                        diag.push_error(
+                            format!("Enum '{value}' can't have a value with the same name"),
+                            &v,
+                        );
+                        None
+                    } else if !existing_names.insert(crate::generator::to_pascal_case(&value)) {
+                        diag.push_error(format!("Duplicated enum value '{value}'"), &v);
+                        None
+                    } else {
+                        Some(value)
+                    }
+                })
+                .collect();
+            let en = Enumeration { name: name.clone(), values, default_value: 0, node: Some(n) };
+            let ty = Type::Enumeration(Rc::new(en));
+            local_registry.insert_type_with_name(ty.clone(), name);
+            inner_types.push(ty);
+        };
 
         for n in node.children() {
             match n.kind() {
                 SyntaxKind::Component => process_component(n.into(), diag, &mut local_registry),
                 SyntaxKind::StructDeclaration => {
-                    process_struct(n.into(), diag, &mut local_registry)
+                    process_struct(n.into(), diag, &mut local_registry, &mut inner_types)
+                }
+                SyntaxKind::EnumDeclaration => {
+                    process_enum(n.into(), diag, &mut local_registry, &mut inner_types)
                 }
                 SyntaxKind::ExportsList => {
                     for n in n.children() {
@@ -100,8 +136,14 @@ impl Document {
                             SyntaxKind::Component => {
                                 process_component(n.into(), diag, &mut local_registry)
                             }
-                            SyntaxKind::StructDeclaration => {
-                                process_struct(n.into(), diag, &mut local_registry)
+                            SyntaxKind::StructDeclaration => process_struct(
+                                n.into(),
+                                diag,
+                                &mut local_registry,
+                                &mut inner_types,
+                            ),
+                            SyntaxKind::EnumDeclaration => {
+                                process_enum(n.into(), diag, &mut local_registry, &mut inner_types)
                             }
                             _ => {}
                         }
@@ -190,7 +232,7 @@ impl Document {
             node: Some(node),
             root_component,
             inner_components,
-            inner_structs,
+            inner_types,
             local_registry,
             custom_fonts,
             exports,
@@ -203,6 +245,7 @@ pub struct PopupWindow {
     pub component: Rc<Component>,
     pub x: NamedReference,
     pub y: NamedReference,
+    pub close_on_click: bool,
     pub parent_element: ElementRc,
 }
 
@@ -213,8 +256,8 @@ type ChildrenInsertionPoint = (ElementRc, syntax_nodes::ChildrenPlaceholder);
 pub struct UsedSubTypes {
     /// All the globals used by the component and its children.
     pub globals: Vec<Rc<Component>>,
-    /// All the structs used by the component and its children.
-    pub structs: Vec<Type>,
+    /// All the structs and enums used by the component and its children.
+    pub structs_and_enums: Vec<Type>,
     /// All the sub components use by this components and its children,
     /// and the amount of time it is used
     pub sub_components: Vec<Rc<Component>>,
@@ -536,6 +579,8 @@ pub struct Element {
 
     /// This element is part of a `for <xxx> in <model>`:
     pub repeated: Option<RepeatedElementInfo>,
+    /// This element is a placeholder to embed an Component at
+    pub is_component_placeholder: bool,
 
     pub states: Vec<State>,
     pub transitions: Vec<Transition>,
@@ -603,6 +648,9 @@ pub fn pretty_print(
                 return Ok(());
             }
         }
+    }
+    if e.is_component_placeholder {
+        write!(f, "/* Component Placeholder */ ")?;
     }
     writeln!(f, "{} := {} {{", e.id, e.base_type)?;
     let mut indentation = indentation + 1;
@@ -862,7 +910,7 @@ impl Element {
                     _ => (),
                 }
             }
-            let visibility = visibility.unwrap_or_else(|| {
+            let visibility = visibility.unwrap_or({
                 if is_legacy_syntax {
                     PropertyVisibility::InOut
                 } else {
@@ -881,17 +929,16 @@ impl Element {
             );
 
             if let Some(csn) = prop_decl.BindingExpression() {
-                if r.bindings
-                    .insert(
-                        prop_name.to_string(),
-                        BindingExpression::new_uncompiled(csn.into()).into(),
-                    )
-                    .is_some()
-                {
-                    diag.push_error(
-                        "Duplicated property binding".into(),
-                        &prop_decl.DeclaredIdentifier(),
-                    );
+                match r.bindings.entry(prop_name.to_string()) {
+                    Entry::Vacant(e) => {
+                        e.insert(BindingExpression::new_uncompiled(csn.into()).into());
+                    }
+                    Entry::Occupied(_) => {
+                        diag.push_error(
+                            "Duplicated property binding".into(),
+                            &prop_decl.DeclaredIdentifier(),
+                        );
+                    }
                 }
             }
             if let Some(csn) = prop_decl.TwoWayBinding() {
@@ -1053,7 +1100,7 @@ impl Element {
                     "pure" => pure = Some(true),
                     "public" => {
                         visibility = PropertyVisibility::Public;
-                        pure = pure.or_else(|| Some(false));
+                        pure = pure.or(Some(false));
                     }
                     _ => (),
                 }
@@ -1097,17 +1144,14 @@ impl Element {
                 );
                 continue;
             }
-            if r.bindings
-                .insert(
-                    resolved_name.into_owned(),
-                    BindingExpression::new_uncompiled(con_node.clone().into()).into(),
-                )
-                .is_some()
-            {
-                diag.push_error(
+            match r.bindings.entry(resolved_name.into_owned()) {
+                Entry::Vacant(e) => {
+                    e.insert(BindingExpression::new_uncompiled(con_node.clone().into()).into());
+                }
+                Entry::Occupied(_) => diag.push_error(
                     "Duplicated callback".into(),
                     &con_node.child_token(SyntaxKind::Identifier).unwrap(),
-                );
+                ),
             }
         }
 
@@ -1306,12 +1350,13 @@ impl Element {
         diag: &mut BuildDiagnostics,
         tr: &TypeRegister,
     ) -> ElementRc {
-        let id = parser::identifier_text(&node).unwrap_or_default();
+        let mut id = parser::identifier_text(&node).unwrap_or_default();
         if matches!(id.as_ref(), "parent" | "self" | "root") {
             diag.push_error(
                 format!("'{}' is a reserved id", id),
                 &node.child_token(SyntaxKind::Identifier).unwrap(),
-            )
+            );
+            id = String::new();
         }
         Element::from_node(
             node.Element(),
@@ -1481,16 +1526,14 @@ impl Element {
                 );
             }
 
-            if self
-                .bindings
-                .insert(
-                    lookup_result.resolved_name.to_string(),
-                    BindingExpression::new_uncompiled(b).into(),
-                )
-                .is_some()
-            {
-                diag.push_error("Duplicated property binding".into(), &name_token);
-            }
+            match self.bindings.entry(lookup_result.resolved_name.to_string()) {
+                Entry::Occupied(_) => {
+                    diag.push_error("Duplicated property binding".into(), &name_token);
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert(BindingExpression::new_uncompiled(b).into());
+                }
+            };
         }
     }
 
@@ -1582,7 +1625,7 @@ impl Element {
     }
 
     pub fn sub_component(&self) -> Option<&Rc<Component>> {
-        if self.repeated.is_some() {
+        if self.repeated.is_some() || self.is_component_placeholder {
             None
         } else if let ElementType::Component(sub_component) = &self.base_type {
             Some(sub_component)
@@ -1629,7 +1672,7 @@ pub fn type_from_node(
         }
         prop_type
     } else if let Some(object_node) = node.ObjectType() {
-        type_struct_from_node(object_node, diag, tr)
+        type_struct_from_node(object_node, diag, tr, None)
     } else if let Some(array_node) = node.ArrayType() {
         Type::Array(Box::new(type_from_node(array_node.Type(), diag, tr)))
     } else {
@@ -1638,11 +1681,12 @@ pub fn type_from_node(
     }
 }
 
-/// Create a Type::Object from a syntax_nodes::ObjectType
+/// Create a [`Type::Struct`] from a [`syntax_nodes::ObjectType`]
 pub fn type_struct_from_node(
     object_node: syntax_nodes::ObjectType,
     diag: &mut BuildDiagnostics,
     tr: &TypeRegister,
+    rust_attributes: Option<Vec<String>>,
 ) -> Type {
     let fields = object_node
         .ObjectTypeMember()
@@ -1653,7 +1697,7 @@ pub fn type_struct_from_node(
             )
         })
         .collect();
-    Type::Struct { fields, name: None, node: Some(object_node) }
+    Type::Struct { fields, name: None, node: Some(object_node), rust_attributes }
 }
 
 fn animation_element_from_node(
@@ -1914,7 +1958,7 @@ pub fn visit_element_expressions(
         vis: &mut impl FnMut(&mut Expression, Option<&str>, &dyn Fn() -> Type),
     ) {
         for (name, expr) in &elem.borrow().bindings {
-            vis(&mut *expr.borrow_mut(), Some(name.as_str()), &|| {
+            vis(&mut expr.borrow_mut(), Some(name.as_str()), &|| {
                 elem.borrow().lookup_property(name).property_type
             });
 
@@ -2168,7 +2212,9 @@ impl Exports {
             |internal_name: &str, internal_name_node: &dyn Spanned, diag: &mut BuildDiagnostics| {
                 if let Ok(ElementType::Component(c)) = type_registry.lookup_element(internal_name) {
                     Some(Either::Left(c))
-                } else if let ty @ Type::Struct { .. } = type_registry.lookup(internal_name) {
+                } else if let ty @ Type::Struct { .. } | ty @ Type::Enumeration(_) =
+                    type_registry.lookup(internal_name)
+                {
                     Some(Either::Right(ty))
                 } else if type_registry.lookup_element(internal_name).is_ok()
                     || type_registry.lookup(internal_name) != Type::Invalid
@@ -2251,21 +2297,27 @@ impl Exports {
         ));
 
         extend_exports(
-            &mut doc.ExportsList().flat_map(|exports| exports.StructDeclaration()).filter_map(
-                |st| {
-                    let name_ident: SyntaxNode = st.DeclaredIdentifier().into();
-                    let name =
-                        parser::identifier_text(&st.DeclaredIdentifier()).unwrap_or_else(|| {
-                            debug_assert!(diag.has_error());
-                            String::new()
-                        });
+            &mut doc
+                .ExportsList()
+                .flat_map(|exports| {
+                    exports
+                        .StructDeclaration()
+                        .map(|st| st.DeclaredIdentifier())
+                        .chain(exports.EnumDeclaration().map(|en| en.DeclaredIdentifier()))
+                })
+                .filter_map(|name_ident| {
+                    let name = parser::identifier_text(&name_ident).unwrap_or_else(|| {
+                        debug_assert!(diag.has_error());
+                        String::new()
+                    });
+
+                    let name_ident = name_ident.into();
 
                     let compo_or_type =
                         resolve_export_to_inner_component_or_import(&name, &name_ident, diag)?;
 
                     Some((ExportedName { name, name_ident }, compo_or_type))
-                },
-            ),
+                }),
         );
 
         let mut sorted_deduped_exports = Vec::with_capacity(sorted_exports_with_duplicates.len());
@@ -2384,7 +2436,29 @@ pub fn inject_element_as_repeated_element(repeated_element: &ElementRc, new_root
 
     new_root.borrow_mut().child_of_layout =
         std::mem::replace(&mut old_root.borrow_mut().child_of_layout, false);
-    new_root.borrow_mut().layout_info_prop = old_root.borrow().layout_info_prop.clone();
+    let layout_info_prop = old_root.borrow().layout_info_prop.clone().or_else(|| {
+        // generate the layout_info_prop that forward to the implicit layout for that item
+        let li_v = crate::layout::create_new_prop(
+            &new_root,
+            "layoutinfo-v",
+            crate::layout::layout_info_type(),
+        );
+        let li_h = crate::layout::create_new_prop(
+            &new_root,
+            "layoutinfo-h",
+            crate::layout::layout_info_type(),
+        );
+        let expr_h = crate::layout::implicit_layout_info_call(&old_root, Orientation::Horizontal);
+        let expr_v = crate::layout::implicit_layout_info_call(&old_root, Orientation::Vertical);
+        let expr_v =
+            BindingExpression::new_with_span(expr_v, old_root.borrow().to_source_location());
+        li_v.element().borrow_mut().bindings.insert(li_v.name().into(), expr_v.into());
+        let expr_h =
+            BindingExpression::new_with_span(expr_h, old_root.borrow().to_source_location());
+        li_h.element().borrow_mut().bindings.insert(li_h.name().into(), expr_h.into());
+        Some((li_h.clone(), li_v.clone()))
+    });
+    new_root.borrow_mut().layout_info_prop = layout_info_prop;
 
     // Replace the repeated component's element with our shadow element. That requires a bit of reference counting
     // surgery and relies on nobody having a strong reference left to the component, which we take out of the Rc.

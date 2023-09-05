@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 use std::io::Write;
 use std::path::Path;
@@ -21,7 +21,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
 
-        let file = std::fs::read_to_string(&path)?;
+        let file = std::fs::read_to_string(path)?;
         let file = file.replace('\r', ""); // Remove \r, because Windows.
 
         const BEGIN_MARKER: &str = "\n```slint";

@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 #pragma once
 
@@ -8,29 +8,26 @@
 #    pragma GCC diagnostic ignored "-Winvalid-offsetof"
 #endif
 
+#include "slint_internal.h"
+#include "slint_size.h"
+#include "slint_point.h"
+#include "slint_platform_internal.h"
+#include "slint_qt_internal.h"
+#include "slint_window.h"
+
 #include <vector>
 #include <memory>
 #include <algorithm>
-#include <iostream> // FIXME: remove: iostream always bring it lots of code so we should not have it in this header
 #include <chrono>
 #include <optional>
-#include <thread>
-#include <mutex>
-#include <condition_variable>
 #include <span>
 #include <functional>
 #include <concepts>
 
-namespace slint::cbindgen_private {
-// Workaround https://github.com/eqrion/cbindgen/issues/43
-struct ComponentVTable;
-struct ItemVTable;
-}
-#include "slint_internal.h"
-#include "slint_size.h"
-#include "slint_point.h"
-#include "slint_backend_internal.h"
-#include "slint_qt_internal.h"
+#ifndef SLINT_FEATURE_FREESTANDING
+#    include <mutex>
+#    include <condition_variable>
+#endif
 
 /// \rst
 /// The :code:`slint` namespace is the primary entry point into the Slint C++ API.
@@ -45,7 +42,6 @@ namespace slint {
 namespace private_api {
 using cbindgen_private::ComponentVTable;
 using cbindgen_private::ItemVTable;
-using ComponentRc = vtable::VRc<private_api::ComponentVTable>;
 using ComponentRef = vtable::VRef<private_api::ComponentVTable>;
 using IndexRange = cbindgen_private::IndexRange;
 using ItemRef = vtable::VRef<private_api::ItemVTable>;
@@ -64,201 +60,6 @@ using cbindgen_private::KeyboardModifiers;
 using cbindgen_private::KeyEvent;
 using cbindgen_private::PointerEvent;
 using cbindgen_private::TableColumn;
-
-/// Internal function that checks that the API that must be called from the main
-/// thread is indeed called from the main thread, or abort the program otherwise
-///
-/// Most API should be called from the main thread. When using thread one must
-/// use slint::invoke_from_event_loop
-inline void assert_main_thread()
-{
-#ifndef NDEBUG
-    static auto main_thread_id = std::this_thread::get_id();
-    if (main_thread_id != std::this_thread::get_id()) {
-        std::cerr << "A function that should be only called from the main thread was called from a "
-                     "thread."
-                  << std::endl;
-        std::cerr << "Most API should be called from the main thread. When using thread one must "
-                     "use slint::invoke_from_event_loop."
-                  << std::endl;
-        std::abort();
-    }
-#endif
-}
-
-class WindowAdapterRc
-{
-public:
-    explicit WindowAdapterRc(cbindgen_private::WindowAdapterRcOpaque adopted_inner)
-    {
-        assert_main_thread();
-        cbindgen_private::slint_windowrc_clone(&adopted_inner, &inner);
-    }
-    WindowAdapterRc() { cbindgen_private::slint_windowrc_init(&inner); }
-    ~WindowAdapterRc() { cbindgen_private::slint_windowrc_drop(&inner); }
-    WindowAdapterRc(const WindowAdapterRc &other) : WindowAdapterRc(other.inner) { }
-    WindowAdapterRc(WindowAdapterRc &&) = delete;
-    WindowAdapterRc &operator=(WindowAdapterRc &&) = delete;
-    WindowAdapterRc &operator=(const WindowAdapterRc &other)
-    {
-        assert_main_thread();
-        if (this != &other) {
-            cbindgen_private::slint_windowrc_drop(&inner);
-            cbindgen_private::slint_windowrc_clone(&other.inner, &inner);
-        }
-        return *this;
-    }
-
-    void show() const { slint_windowrc_show(&inner); }
-    void hide() const { slint_windowrc_hide(&inner); }
-    bool is_visible() const { return slint_windowrc_is_visible(&inner); }
-
-    float scale_factor() const { return slint_windowrc_get_scale_factor(&inner); }
-    void set_scale_factor(float value) const { slint_windowrc_set_scale_factor(&inner, value); }
-
-    bool dark_color_scheme() const { return slint_windowrc_dark_color_scheme(&inner); }
-
-    bool text_input_focused() const { return slint_windowrc_get_text_input_focused(&inner); }
-    void set_text_input_focused(bool value) const
-    {
-        slint_windowrc_set_text_input_focused(&inner, value);
-    }
-
-    template<typename Component, typename ItemArray>
-    void unregister_component(Component *c, ItemArray items) const
-    {
-        cbindgen_private::slint_unregister_component(
-                vtable::VRef<ComponentVTable> { &Component::static_vtable, c }, items, &inner);
-    }
-
-    void set_focus_item(const ComponentRc &component_rc, uintptr_t item_index)
-    {
-        cbindgen_private::ItemRc item_rc { component_rc, item_index };
-        cbindgen_private::slint_windowrc_set_focus_item(&inner, &item_rc);
-    }
-
-    template<typename Component, typename ItemArray>
-    void register_component(Component *c, ItemArray items) const
-    {
-        cbindgen_private::slint_register_component(
-                vtable::VRef<ComponentVTable> { &Component::static_vtable, c }, items, &inner);
-    }
-
-    template<typename Component>
-    void set_component(const Component &c) const
-    {
-        auto self_rc = (*c.self_weak.lock()).into_dyn();
-        slint_windowrc_set_component(&inner, &self_rc);
-    }
-
-    template<typename Component, typename Parent>
-    void show_popup(const Parent *parent_component, cbindgen_private::Point p,
-                    cbindgen_private::ItemRc parent_item) const
-    {
-        auto popup = Component::create(parent_component).into_dyn();
-        cbindgen_private::slint_windowrc_show_popup(&inner, &popup, p, &parent_item);
-    }
-
-    template<std::invocable<RenderingState, GraphicsAPI> F>
-    std::optional<SetRenderingNotifierError> set_rendering_notifier(F callback) const
-    {
-        auto actual_cb = [](RenderingState state, GraphicsAPI graphics_api, void *data) {
-            (*reinterpret_cast<F *>(data))(state, graphics_api);
-        };
-        SetRenderingNotifierError err;
-        if (cbindgen_private::slint_windowrc_set_rendering_notifier(
-                    &inner, actual_cb,
-                    [](void *user_data) { delete reinterpret_cast<F *>(user_data); },
-                    new F(std::move(callback)), &err)) {
-            return {};
-        } else {
-            return err;
-        }
-    }
-
-    // clang-format off
-    template<std::invocable F>
-        requires(std::is_convertible_v<std::invoke_result_t<F>, CloseRequestResponse>)
-    void on_close_requested(F callback) const
-    // clang-format on
-    {
-        auto actual_cb = [](void *data) { return (*reinterpret_cast<F *>(data))(); };
-        cbindgen_private::slint_windowrc_on_close_requested(
-                &inner, actual_cb, [](void *user_data) { delete reinterpret_cast<F *>(user_data); },
-                new F(std::move(callback)));
-    }
-
-    void request_redraw() const { cbindgen_private::slint_windowrc_request_redraw(&inner); }
-
-    slint::PhysicalPosition position() const
-    {
-        slint::PhysicalPosition pos;
-        cbindgen_private::slint_windowrc_position(&inner, &pos);
-        return pos;
-    }
-
-    void set_logical_position(const slint::LogicalPosition &pos)
-    {
-        cbindgen_private::slint_windowrc_set_logical_position(&inner, &pos);
-    }
-
-    void set_physical_position(const slint::PhysicalPosition &pos)
-    {
-        cbindgen_private::slint_windowrc_set_physical_position(&inner, &pos);
-    }
-
-    slint::PhysicalSize size() const
-    {
-        return slint::PhysicalSize(cbindgen_private::slint_windowrc_size(&inner));
-    }
-
-    void set_logical_size(const slint::LogicalSize &size)
-    {
-        cbindgen_private::slint_windowrc_set_logical_size(&inner, &size);
-    }
-
-    void set_physical_size(const slint::PhysicalSize &size)
-    {
-        cbindgen_private::slint_windowrc_set_physical_size(&inner, &size);
-    }
-
-    void dispatch_key_event(const cbindgen_private::KeyInputEvent &event)
-    {
-        private_api::assert_main_thread();
-        cbindgen_private::slint_windowrc_dispatch_key_event(&inner, &event);
-    }
-
-    /// Registers a font by the specified path. The path must refer to an existing
-    /// TrueType font.
-    /// \returns an empty optional on success, otherwise an error string
-    inline std::optional<SharedString> register_font_from_path(const SharedString &path)
-    {
-        SharedString maybe_err;
-        cbindgen_private::slint_register_font_from_path(&inner, &path, &maybe_err);
-        if (!maybe_err.empty()) {
-            return maybe_err;
-        } else {
-            return {};
-        }
-    }
-
-    /// Registers a font by the data. The data must be valid TrueType font data.
-    /// \returns an empty optional on success, otherwise an error string
-    inline std::optional<SharedString> register_font_from_data(const uint8_t *data, std::size_t len)
-    {
-        SharedString maybe_err;
-        cbindgen_private::slint_register_font_from_data(
-                &inner, { const_cast<uint8_t *>(data), len }, &maybe_err);
-        if (!maybe_err.empty()) {
-            return maybe_err;
-        } else {
-            return {};
-        }
-    }
-
-private:
-    cbindgen_private::WindowAdapterRcOpaque inner;
-};
 
 constexpr inline ItemTreeNode make_item_node(uint32_t child_count, uint32_t child_index,
                                              uint32_t parent_index, uint32_t item_array_index,
@@ -398,120 +199,6 @@ public:
     }
 };
 
-/// This class represents a window towards the windowing system, that's used to render the
-/// scene of a component. It provides API to control windowing system specific aspects such
-/// as the position on the screen.
-class Window
-{
-public:
-    /// \private
-    /// Internal function used by the generated code to construct a new instance of this
-    /// public API wrapper.
-    explicit Window(const private_api::WindowAdapterRc &windowrc) : inner(windowrc) { }
-    Window(const Window &other) = delete;
-    Window &operator=(const Window &other) = delete;
-    Window(Window &&other) = delete;
-    Window &operator=(Window &&other) = delete;
-    /// Destroys this window. Window instances are explicitly shared and reference counted.
-    /// If this window instance is the last one referencing the window towards the windowing
-    /// system, then it will also become hidden and destroyed.
-    ~Window() = default;
-
-    /// Registers the window with the windowing system in order to make it visible on the screen.
-    void show() { inner.show(); }
-    /// De-registers the window from the windowing system, therefore hiding it.
-    void hide() { inner.hide(); }
-
-    /// Returns the visibility state of the window. This function can return false even if you
-    /// previously called show() on it, for example if the user minimized the window.
-    bool is_visible() const { return inner.is_visible(); }
-
-    /// This function allows registering a callback that's invoked during the different phases of
-    /// rendering. This allows custom rendering on top or below of the scene.
-    ///
-    /// The provided callback must be callable with a slint::RenderingState and the
-    /// slint::GraphicsAPI argument.
-    ///
-    /// On success, the function returns a std::optional without value. On error, the function
-    /// returns the error code as value in the std::optional.
-    template<std::invocable<RenderingState, GraphicsAPI> F>
-    std::optional<SetRenderingNotifierError> set_rendering_notifier(F &&callback) const
-    {
-        return inner.set_rendering_notifier(std::forward<F>(callback));
-    }
-
-    /// This function allows registering a callback that's invoked when the user tries to close
-    /// a window.
-    /// The callback has to return a CloseRequestResponse.
-    // clang-format off
-    template<std::invocable F>
-        requires(std::is_convertible_v<std::invoke_result_t<F>, CloseRequestResponse>)
-    void on_close_requested(F &&callback) const
-    // clang-format on
-    {
-        return inner.on_close_requested(std::forward<F>(callback));
-    }
-
-    /// This function issues a request to the windowing system to redraw the contents of the window.
-    void request_redraw() const { inner.request_redraw(); }
-
-    /// Returns the position of the window on the screen, in physical screen coordinates and
-    /// including a window frame (if present).
-    slint::PhysicalPosition position() const { return inner.position(); }
-
-    /// Sets the position of the window on the screen, in physical screen coordinates and including
-    /// a window frame (if present).
-    /// Note that on some windowing systems, such as Wayland, this functionality is not available.
-    void set_position(const slint::LogicalPosition &pos) { inner.set_logical_position(pos); }
-    /// Sets the position of the window on the screen, in physical screen coordinates and including
-    /// a window frame (if present).
-    /// Note that on some windowing systems, such as Wayland, this functionality is not available.
-    void set_position(const slint::PhysicalPosition &pos) { inner.set_physical_position(pos); }
-
-    /// Returns the size of the window on the screen, in physical screen coordinates and excluding
-    /// a window frame (if present).
-    slint::PhysicalSize size() const { return inner.size(); }
-
-    /// Resizes the window to the specified size on the screen, in logical pixels and excluding
-    /// a window frame (if present).
-    void set_size(const slint::LogicalSize &size) { inner.set_logical_size(size); }
-    /// Resizes the window to the specified size on the screen, in physical pixels and excluding
-    /// a window frame (if present).
-    void set_size(const slint::PhysicalSize &size) { inner.set_physical_size(size); }
-
-    /// Dispatch a key press event to the scene.
-    ///
-    /// Use this when you're implementing your own backend and want to forward user input events.
-    ///
-    /// The \a text is the unicode representation of the key.
-    void dispatch_key_press_event(const SharedString &text)
-    {
-        cbindgen_private::KeyInputEvent event { text, cbindgen_private::KeyEventType::KeyPressed, 0,
-                                                0 };
-        inner.dispatch_key_event(event);
-    }
-
-    /// Dispatch a key release event to the scene.
-    ///
-    /// Use this when you're implementing your own backend and want to forward user input events.
-    ///
-    /// The \a text is the unicode representation of the key.
-    void dispatch_key_release_event(const SharedString &text)
-    {
-        cbindgen_private::KeyInputEvent event { text, cbindgen_private::KeyEventType::KeyReleased,
-                                                0, 0 };
-        inner.dispatch_key_event(event);
-    }
-
-    /// \private
-    private_api::WindowAdapterRc &window_handle() { return inner; }
-    /// \private
-    const private_api::WindowAdapterRc &window_handle() const { return inner; }
-
-private:
-    private_api::WindowAdapterRc inner;
-};
-
 /// A Timer that can call a callback at repeated interval
 ///
 /// Use the static single_shot function to make a single shot timer
@@ -587,6 +274,14 @@ inline LayoutInfo LayoutInfo::merge(const LayoutInfo &other) const
 
 namespace private_api {
 
+inline static void register_component(const vtable::VRc<ComponentVTable> *c,
+                                      const std::optional<slint::Window> &maybe_window)
+{
+    const cbindgen_private::WindowAdapterRcOpaque *window_ptr =
+            maybe_window.has_value() ? &maybe_window->window_handle().handle() : nullptr;
+    cbindgen_private::slint_register_component(c, window_ptr);
+}
+
 inline SharedVector<float> solve_box_layout(const cbindgen_private::BoxLayoutData &data,
                                             cbindgen_private::Slice<int> repeater_indexes)
 {
@@ -657,10 +352,9 @@ auto access_array_index(const M &model, size_t index)
 } // namespace private_api
 
 /// \rst
-/// A Model is providing Data for
-/// `for - in<../../slint/src/reference/repetitions.html>`_ repetitions or
-/// `ListView<../../slint/src/builtins/widgets.html#listview>`_ elements of the :code:`.slint`
-/// language \endrst
+/// A Model is providing Data for |Repetition|_ repetitions or |ListView|_ elements of the
+/// :code:`.slint` language
+/// \endrst
 template<typename ModelData>
 class Model
 {
@@ -685,17 +379,25 @@ public:
     /// If the model can update the data, it should also call `row_changed`
     virtual void set_row_data(size_t, const ModelData &)
     {
+#ifndef SLINT_FEATURE_FREESTANDING
         std::cerr << "Model::set_row_data was called on a read-only model" << std::endl;
+#endif
     };
 
     /// \private
     /// Internal function called by the view to register itself
-    void attach_peer(private_api::ModelPeer p) { peers.push_back(std::move(p)); }
+    void attach_peer(private_api::ModelPeer p)
+    {
+        peers.push_back(std::move(p));
+    }
 
     /// \private
     /// Internal function called from within bindings to register with the currently
     /// evaluating dependency and get notified when this model's row count changes.
-    void track_row_count_changes() const { model_row_count_dirty_property.get(); }
+    void track_row_count_changes() const
+    {
+        model_row_count_dirty_property.get();
+    }
 
     /// \private
     /// Internal function called from within bindings to register with the currently
@@ -890,7 +592,7 @@ struct FilterModelInner : private_api::ModelChangeListener
             return;
         }
 
-        std::vector<int> added_accepted_rows;
+        std::vector<size_t> added_accepted_rows;
         for (auto i = index; i < index + count; ++i) {
             if (auto data = source_model->row_data(i)) {
                 if (filter_fn(*data)) {
@@ -1129,7 +831,7 @@ struct SortModelInner : private_api::ModelChangeListener
             ModelData inserted_value = *source_model->row_data(row);
             auto insertion_point =
                     std::lower_bound(sorted_rows.begin(), sorted_rows.end(), inserted_value,
-                                     [this](int sorted_row, const ModelData &inserted_value) {
+                                     [this](size_t sorted_row, const ModelData &inserted_value) {
                                          auto sorted_elem = source_model->row_data(sorted_row);
                                          return comp(*sorted_elem, inserted_value);
                                      });
@@ -1152,7 +854,7 @@ struct SortModelInner : private_api::ModelChangeListener
         ModelData changed_value = *source_model->row_data(changed_row);
         auto insertion_point =
                 std::lower_bound(sorted_rows.begin(), sorted_rows.end(), changed_value,
-                                 [this](int sorted_row, const ModelData &changed_value) {
+                                 [this](size_t sorted_row, const ModelData &changed_value) {
                                      auto sorted_elem = source_model->row_data(sorted_row);
                                      return comp(*sorted_elem, changed_value);
                                  });
@@ -1174,7 +876,7 @@ struct SortModelInner : private_api::ModelChangeListener
             return;
         }
 
-        std::vector<int> removed_rows;
+        std::vector<size_t> removed_rows;
         removed_rows.reserve(count);
 
         for (auto it = sorted_rows.begin(); it != sorted_rows.end();) {
@@ -1190,10 +892,11 @@ struct SortModelInner : private_api::ModelChangeListener
             ++it;
         }
 
-        for (int removed_row : removed_rows) {
+        for (auto removed_row : removed_rows) {
             target_model.row_removed(removed_row, 1);
         }
     }
+
     void reset() override
     {
         sorted_rows_dirty = true;
@@ -1210,7 +913,7 @@ struct SortModelInner : private_api::ModelChangeListener
         for (size_t i = 0; i < sorted_rows.size(); ++i)
             sorted_rows[i] = i;
 
-        std::sort(sorted_rows.begin(), sorted_rows.end(), [this](int lhs_index, int rhs_index) {
+        std::sort(sorted_rows.begin(), sorted_rows.end(), [this](auto lhs_index, auto rhs_index) {
             auto lhs_elem = source_model->row_data(lhs_index);
             auto rhs_elem = source_model->row_data(rhs_index);
             return comp(*lhs_elem, *rhs_elem);
@@ -1258,6 +961,7 @@ public:
     {
         inner->source_model->set_row_data(inner->sorted_rows[i], value);
     }
+
     /// Re-applies the model's sort function on each row of the source model. Use this if state
     /// external to the sort function has changed.
     void reset() { inner->reset(); }
@@ -1275,6 +979,87 @@ public:
 
 private:
     std::shared_ptr<private_api::SortModelInner<ModelData>> inner;
+};
+
+template<typename ModelData>
+class ReverseModel;
+
+namespace private_api {
+template<typename ModelData>
+struct ReverseModelInner : private_api::ModelChangeListener
+{
+    ReverseModelInner(std::shared_ptr<slint::Model<ModelData>> source_model,
+                      slint::ReverseModel<ModelData> &target_model)
+        : source_model(source_model), target_model(target_model)
+    {
+    }
+
+    void row_added(size_t first_inserted_row, size_t count) override
+    {
+        auto row_count = source_model->row_count();
+        auto old_row_count = row_count - count;
+        auto row = old_row_count - first_inserted_row;
+
+        target_model.row_added(row, count);
+    }
+
+    void row_changed(size_t changed_row) override
+    {
+        target_model.row_changed(source_model->row_count() - 1 - changed_row);
+    }
+
+    void row_removed(size_t first_removed_row, size_t count) override
+    {
+        auto row_count = source_model->row_count();
+        auto old_row_count = row_count + count;
+        auto row = old_row_count - first_removed_row - 1;
+
+        target_model.row_removed(row, count);
+    }
+
+    void reset() override { source_model.reset(); }
+
+    std::shared_ptr<slint::Model<ModelData>> source_model;
+    slint::ReverseModel<ModelData> &target_model;
+};
+}
+
+/// The ReverseModel acts as an adapter model for a given source model by reserving all rows.
+/// This means that the first row in the source model is the last row of this model, the second
+/// row is the second last, and so on.
+template<typename ModelData>
+class ReverseModel : public Model<ModelData>
+{
+    friend struct private_api::ReverseModelInner<ModelData>;
+
+public:
+    /// Constructs a new ReverseModel that provides a reversed view on the \a source_model.
+    ReverseModel(std::shared_ptr<Model<ModelData>> source_model)
+        : inner(std::make_shared<private_api::ReverseModelInner<ModelData>>(std::move(source_model),
+                                                                            *this))
+    {
+        inner->source_model->attach_peer(inner);
+    }
+
+    size_t row_count() const override { return inner->source_model->row_count(); }
+
+    std::optional<ModelData> row_data(size_t i) const override
+    {
+        auto count = inner->source_model->row_count();
+        return inner->source_model->row_data(count - i - 1);
+    }
+
+    void set_row_data(size_t i, const ModelData &value) override
+    {
+        auto count = inner->source_model->row_count();
+        inner->source_model->set_row_data(count - i - 1, value);
+    }
+
+    /// Returns the source model of this reserve model.
+    std::shared_ptr<Model<ModelData>> source_model() const { return inner->source_model; }
+
+private:
+    std::shared_ptr<private_api::ReverseModelInner<ModelData>> inner;
 };
 
 namespace private_api {
@@ -1454,6 +1239,16 @@ public:
     }
 };
 
+inline SharedString translate(const SharedString &original, const SharedString &context,
+                              const SharedString &domain,
+                              cbindgen_private::Slice<SharedString> arguments, int n,
+                              const SharedString &plural)
+{
+    SharedString result = original;
+    cbindgen_private::slint_translate(&result, &context, &domain, arguments, n, &plural);
+    return result;
+}
+
 } // namespace private_api
 
 #if !defined(DOXYGEN)
@@ -1478,8 +1273,9 @@ cbindgen_private::NativeStyleMetrics::~NativeStyleMetrics()
 #endif // !defined(DOXYGEN)
 
 namespace private_api {
+// Was used in Slint <= 1.1.0 to have an error message in case of mismatch
 template<int Major, int Minor, int Patch>
-struct VersionCheckHelper
+struct [[deprecated]] VersionCheckHelper
 {
 };
 }
@@ -1547,6 +1343,8 @@ void invoke_from_event_loop(Functor f)
             [](void *data) { delete reinterpret_cast<Functor *>(data); });
 }
 
+#ifndef SLINT_FEATURE_FREESTANDING
+
 /// Blocking version of invoke_from_event_loop()
 ///
 /// Just like invoke_from_event_loop(), this will run the specified functor from the thread running
@@ -1599,7 +1397,7 @@ auto blocking_invoke_from_event_loop(Functor f) -> std::invoke_result_t<Functor>
     return std::move(*result);
 }
 
-#if !defined(DOXYGEN) // Doxygen doesn't see this as an overload of the previous one
+#    if !defined(DOXYGEN) // Doxygen doesn't see this as an overload of the previous one
 // clang-format off
 template<std::invocable Functor>
     requires(std::is_void_v<std::invoke_result_t<Functor>>)
@@ -1618,6 +1416,7 @@ void blocking_invoke_from_event_loop(Functor f)
     std::unique_lock lock(mtx);
     cv.wait(lock, [&] { return ok; });
 }
+#    endif
 #endif
 
 } // namespace slint

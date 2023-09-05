@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 /*!
 The backend is the abstraction for crates that need to do the actual drawing and event loop
@@ -7,12 +7,14 @@ The backend is the abstraction for crates that need to do the actual drawing and
 
 #![warn(missing_docs)]
 
-use crate::api::LogicalPosition;
 pub use crate::api::PlatformError;
+use crate::api::{LogicalPosition, LogicalSize};
+pub use crate::renderer::Renderer;
+#[cfg(feature = "software-renderer")]
 pub use crate::software_renderer;
 #[cfg(all(not(feature = "std"), feature = "unsafe-single-threaded"))]
 use crate::unsafe_single_threaded::{thread_local, OnceCell};
-pub use crate::window::WindowAdapter;
+pub use crate::window::{LayoutConstraints, WindowAdapter, WindowProperties};
 use crate::SharedString;
 use alloc::boxed::Box;
 use alloc::rc::Rc;
@@ -94,18 +96,19 @@ pub trait Platform {
 }
 
 /// The clip board, used in [`Platform::clipboard_text`] and [Platform::set_clipboard_text`]
+#[repr(u8)]
 #[non_exhaustive]
 #[derive(PartialEq, Clone, Default)]
 pub enum Clipboard {
     /// This is the default clipboard used for text action for Ctrl+V,  Ctrl+C.
     /// Corresponds to the secondary clipboard on X11.
     #[default]
-    DefaultClipboard,
+    DefaultClipboard = 0,
 
     /// This is the clipboard that is used when text is selected
     /// Corresponds to the primary clipboard on X11.
     /// The Platform implementation should do nothing if copy on select is not supported on that platform.
-    SelectionClipboard,
+    SelectionClipboard = 1,
 }
 
 /// Trait that is returned by the [`Platform::new_event_loop_proxy`]
@@ -171,7 +174,7 @@ pub fn set_platform(platform: Box<dyn Platform + 'static>) -> Result<(), SetPlat
         if let Some(proxy) = platform.new_event_loop_proxy() {
             EVENTLOOP_PROXY.set(proxy).map_err(|_| SetPlatformError::AlreadySet)?
         }
-        instance.set(platform.into()).map_err(|_| SetPlatformError::AlreadySet).unwrap();
+        instance.set(platform).map_err(|_| SetPlatformError::AlreadySet).unwrap();
         Ok(())
     })
 }
@@ -210,10 +213,10 @@ pub fn duration_until_next_timer_update() -> Option<core::time::Duration> {
 pub use crate::input::key_codes::Key;
 pub use crate::input::PointerEventButton;
 
-/// A event that describes user input.
+/// A event that describes user input or windowing system events.
 ///
 /// Slint backends typically receive events from the windowing system, translate them to this
-/// enum and deliver to the scene of items via [`slint::Window::dispatch_event()`](`crate::api::Window::dispatch_event()`).
+/// enum and deliver them to the scene of items via [`slint::Window::dispatch_event()`](`crate::api::Window::dispatch_event()`).
 ///
 /// The pointer variants describe events originating from an input device such as a mouse
 /// or a contact point on a touch-enabled surface.
@@ -222,6 +225,7 @@ pub use crate::input::PointerEventButton;
 #[allow(missing_docs)]
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
+#[repr(u32)]
 pub enum WindowEvent {
     /// A pointer was pressed.
     PointerPressed {
@@ -258,7 +262,7 @@ pub enum WindowEvent {
         /// ```
         text: SharedString,
     },
-    /// A key was pressed.
+    /// A key was released.
     KeyReleased {
         /// The unicode representation of the key released.
         ///
@@ -269,6 +273,36 @@ pub enum WindowEvent {
         /// ```
         text: SharedString,
     },
+    /// The window's scale factor has changed. This can happen for example when the display's resolution
+    /// changes, the user selects a new scale factor in the system settings, or the window is moved to a
+    /// different screen.
+    /// Platform implementations should dispatch this event also right after the initial window creation,
+    /// to set the initial scale factor the windowing system provided for the window.
+    ScaleFactorChanged {
+        /// The window system provided scale factor to map logical pixels to physical pixels.
+        scale_factor: f32,
+    },
+    /// The window was resized.
+    ///
+    /// The backend must send this event to ensure that the `width` and `height` property of the root Window
+    /// element are properly set.
+    Resized {
+        /// The new logical size of the window
+        size: LogicalSize,
+    },
+    /// The user requested to close the window.
+    ///
+    /// The backend should send this event when the user tries to close the window,for example by pressing the close button.
+    ///
+    /// This will have the effect of invoking the callback set in [`Window::on_close_requested()`](`crate::api::Window::on_close_requested()`)
+    /// and then hiding the window depending on the return value of the callback.
+    CloseRequested,
+
+    /// The Window was activated or de-activated.
+    ///
+    /// The backend should dispatch this event with true when the window gains focus
+    /// and false when the window loses focus.
+    WindowActiveChanged(bool),
 }
 
 impl WindowEvent {

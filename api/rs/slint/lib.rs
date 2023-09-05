@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 // cSpell: ignore buildrs
 
@@ -9,15 +9,16 @@
 This crate is the main entry point for embedding user interfaces designed with
 [Slint](https://slint.rs/) in Rust programs.
 */
-#![doc = concat!("If you are new to Slint, start with the [Walk-through tutorial](https://slint-ui.com/releases/", env!("CARGO_PKG_VERSION"), "/docs/tutorial/rust)")]
+#![doc = concat!("If you are new to Slint, start with the [Walk-through **tutorial**](https://slint.dev/releases/", env!("CARGO_PKG_VERSION"), "/docs/tutorial/rust)")]
 /*! If you are already familiar with Slint, the following topics provide related information.
 
-## Related topics
+## Topics
 
 */
-#![doc = concat!("* [The Slint Language Documentation](https://slint-ui.com/releases/", env!("CARGO_PKG_VERSION"), "/docs/slint)")]
-/*! * [Slint on Microcontrollers](docs::mcu)
- * [Debugging Techniques](docs::debugging_techniques)
+#![doc = concat!("- [The Slint Language Documentation](https://slint.dev/releases/", env!("CARGO_PKG_VERSION"), "/docs/slint)")]
+/*! - [Type mappings between .slint and Rust](docs::type_mappings)
+ - [Feature flags and backend selection](docs::cargo_features)
+ - [Slint on Microcontrollers](docs::mcu)
 
 ## How to use this crate:
 
@@ -27,7 +28,7 @@ of including them in Rust:
  - The `.slint` code is [inline in a macro](#the-slint-code-in-a-macro).
  - The `.slint` code in [external files compiled with `build.rs`](#the-slint-code-in-external-files-is-compiled-with-buildrs)
 */
-#![doc = concat!(" - The `.slint` code is loaded dynamically at run-time from the file system, by using the [interpreter API](https://slint-ui.com/releases/", env!("CARGO_PKG_VERSION"), "/docs/rust/slint_interpreter/).")]
+#![doc = concat!(" - The `.slint` code is loaded dynamically at run-time from the file system, by using the [interpreter API](https://slint.dev/releases/", env!("CARGO_PKG_VERSION"), "/docs/rust/slint_interpreter/).")]
 /*!
 
 With the first two methods, the markup code is translated to Rust code and each component is turned into a Rust
@@ -57,7 +58,7 @@ fn main() {
 ### The .slint code in external files is compiled with `build.rs`
 
 When your design becomes bigger in terms of markup code, you may want move it to a dedicated*/
-#![doc = concat!("`.slint` file. It's also possible to split a `.slint` file into multiple files using [modules](https://slint-ui.com/releases/", env!("CARGO_PKG_VERSION"), "/docs/slint/src/reference/modules.html).")]
+#![doc = concat!("`.slint` file. It's also possible to split a `.slint` file into multiple files using [modules](https://slint.dev/releases/", env!("CARGO_PKG_VERSION"), "/docs/slint/src/reference/modules.html).")]
 /*!Use a [build script](https://doc.rust-lang.org/cargo/reference/build-scripts.html) to compile
 your main `.slint` file:
 
@@ -70,11 +71,11 @@ build = "build.rs"
 edition = "2021"
 
 [dependencies]
-slint = "1.0.0"
+slint = "1.2.0"
 ...
 
 [build-dependencies]
-slint-build = "1.0.0"
+slint-build = "1.2.0"
 ```
 
 Use the API of the slint-build crate in the `build.rs` file:
@@ -164,52 +165,10 @@ thread to avoid blocking animations. Use the [`invoke_from_event_loop`] function
 
 To run a function with a delay or with an interval use a [`Timer`].
 
-## Type Mappings
-
-The types used for properties in `.slint` design markup each translate to specific types in Rust.
-The follow table summarizes the entire mapping:
-
-| `.slint` Type | Rust Type | Note |
-| --- | --- | --- |
-| `int` | `i32` | |
-| `float` | `f32` | |
-| `bool` | `bool` | |
-| `string` | [`SharedString`] | A reference-counted string type that can be easily converted to a str reference. |
-| `color` | [`Color`] | |
-| `brush` | [`Brush`] | |
-| `image` | [`Image`] | |
-| `physical_length` | `f32` | The unit are physical pixels. |
-| `length` | `f32` | At run-time, logical lengths are automatically translated to physical pixels using the device pixel ratio. |
-| `duration` | `i64` | At run-time, durations are always represented as signed 64-bit integers with millisecond precision. |
-| `angle` | `f32` | The value in degrees |
-| `relative-font-size` | `f32` | Relative font size factor that is multiplied with the `Window.default-font-size` and can be converted to a `length`. |
-| structure | `struct` of the same name | |
-| anonymous object | anonymous tuple | The fields are in alphabetical order. |
-| array | [`ModelRc`] |  |
-
-For user defined structures in the .slint, an extra struct is generated.
-For example, if the `.slint` contains
-```slint,ignore
-export struct MyStruct {
-    foo: int,
-    bar: string,
-}
-```
-
-The following struct would be generated:
-
-```rust
-#[derive(Default, Clone, Debug, PartialEq)]
-struct MyStruct {
-    foo : i32,
-    bar: slint::SharedString,
-}
-```
-
 ## Exported Global singletons
 
 */
-#![doc = concat!("When you export a [global singleton](https://slint-ui.com/releases/", env!("CARGO_PKG_VERSION"), "/docs/slint/src/reference/globals.html) from the main file,")]
+#![doc = concat!("When you export a [global singleton](https://slint.dev/releases/", env!("CARGO_PKG_VERSION"), "/docs/slint/src/reference/globals.html) from the main file,")]
 /*! it is also generated with the exported name. Like the main component, the generated struct have
 inherent method to access the properties and callback:
 
@@ -225,30 +184,33 @@ The global can be accessed with the [`ComponentHandle::global()`] function, or w
 
 See the [documentation of the `Global` trait](Global) for an example.
 */
-//! ## Feature flags
-#![cfg_attr(feature = "document-features", doc = document_features::document_features!())]
+
 #![warn(missing_docs)]
 #![deny(unsafe_code)]
-#![doc(html_logo_url = "https://slint-ui.com/logo/slint-logo-square-light.svg")]
+#![doc(html_logo_url = "https://slint.dev/logo/slint-logo-square-light.svg")]
 #![cfg_attr(not(feature = "std"), no_std)]
+#![allow(clippy::needless_doctest_main)] // We document how to write a main function
 
 extern crate alloc;
 
-#[cfg(not(feature = "compat-1-0"))]
+#[cfg(not(feature = "compat-1-2"))]
 compile_error!(
-    "The feature `compat-1-0` must be enabled to ensure \
+    "The feature `compat-1-2` must be enabled to ensure \
     forward compatibility with future version of this crate"
 );
 
 pub use slint_macros::slint;
 
 pub use i_slint_core::api::*;
+pub use i_slint_core::component_factory::ComponentFactory;
+#[cfg(not(target_arch = "wasm32"))]
+pub use i_slint_core::graphics::{BorrowedOpenGLTextureBuilder, BorrowedOpenGLTextureOrigin};
 pub use i_slint_core::graphics::{
     Brush, Color, Image, LoadImageError, Rgb8Pixel, Rgba8Pixel, RgbaColor, SharedPixelBuffer,
 };
 pub use i_slint_core::model::{
     FilterModel, MapModel, Model, ModelExt, ModelNotify, ModelPeer, ModelRc, ModelTracker,
-    SortModel, StandardListViewItem, TableColumn, VecModel,
+    ReverseModel, SortModel, StandardListViewItem, TableColumn, VecModel,
 };
 pub use i_slint_core::sharedvector::SharedVector;
 pub use i_slint_core::timers::{Timer, TimerMode};
@@ -275,6 +237,43 @@ macro_rules! include_modules {
     };
 }
 
+/// Initialize translations when using the `gettext` feature.
+///
+/// Call this in your main function with the path where translations are located.
+/// This macro internally calls the [`bindtextdomain`](https://man7.org/linux/man-pages/man3/bindtextdomain.3.html) function from gettext.
+///
+/// The first argument of the macro must be an expression that implements `Into<std::path::PathBuf>`.
+/// It specifies the directory in which gettext should search for translations.
+///
+/// Translations are expected to be found at `<dirname>/<locale>/LC_MESSAGES/<crate>.mo`,
+/// where `dirname` is the directory passed as an argument to this macro,
+/// `locale` is a locale name (e.g., `en`, `en_GB`, `fr`), and
+/// `crate` is the package name obtained from the `CARGO_PKG_NAME` environment variable.
+///
+/// ### Example
+/// ```rust
+/// fn main() {
+///    slint::init_translations!(concat!(env!("CARGO_MANIFEST_DIR"), "/translations/"));
+///    // ...
+/// }
+/// ```
+///
+/// For example, assuming this is in a crate called `example` and the default locale
+/// is configured to be French, it will load translations at runtime from
+/// `/path/to/example/translations/fr/LC_MESSAGES/example.mo`.
+///
+/// Another example of loading translations relative to the executable:
+/// ```rust
+/// slint::init_translations!(std::env::current_exe().unwrap().parent().unwrap().join("translations"));
+/// ```
+#[cfg(feature = "gettext")]
+#[macro_export]
+macro_rules! init_translations {
+    ($dirname:expr) => {
+        $crate::private_unstable_api::init_translations(env!("CARGO_PKG_NAME"), $dirname);
+    };
+}
+
 /// This module contains items that you need to use or implement if you want use Slint in an environment without
 /// one of the supplied platform backends such as qt or winit.
 ///
@@ -284,12 +283,21 @@ macro_rules! include_modules {
 /// The [Slint on Microcontrollers](crate::docs::mcu) documentation has additional examples.
 pub mod platform {
     pub use i_slint_core::platform::*;
+
+    /// This module contains the [`femtovg_renderer::FemtoVGRenderer`] and related types.
+    ///
+    /// It is only enabled when the `renderer-femtovg` Slint feature is enabled.
+    #[cfg(feature = "renderer-femtovg")]
+    pub mod femtovg_renderer {
+        pub use i_slint_renderer_femtovg::FemtoVGRenderer;
+        pub use i_slint_renderer_femtovg::OpenGLInterface;
+    }
 }
 
 /// Helper type that helps checking that the generated code is generated for the right version
 #[doc(hidden)]
 #[allow(non_camel_case_types)]
-pub struct VersionCheck_1_0_3;
+pub struct VersionCheck_1_2_0;
 
 #[cfg(doctest)]
 mod compile_fail_tests;

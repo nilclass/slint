@@ -1,15 +1,15 @@
-# Copyright © SixtyFPS GmbH <info@slint-ui.com>
-# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+# Copyright © SixtyFPS GmbH <info@slint.dev>
+# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 [package]
 name = "i-slint-backend-selector"
-version = "1.0.3"
-authors = ["Slint Developers <info@slint-ui.com>"]
+version = "1.2.0"
+authors = ["Slint Developers <info@slint.dev>"]
 edition = "2021"
-license = "GPL-3.0-only OR LicenseRef-Slint-commercial"
+license = "GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial"
 description = "Helper crate to pick the default rendering backend for Slint"
 repository = "https://github.com/slint-ui/slint"
-homepage = "https://slint-ui.com"
+homepage = "https://slint.dev"
 
 [lib]
 path = "lib.rs"
@@ -18,17 +18,22 @@ path = "lib.rs"
 backend-winit = ["backend-winit-x11", "backend-winit-wayland"]
 backend-winit-x11 = ["i-slint-backend-winit/x11"]
 backend-winit-wayland = ["i-slint-backend-winit/wayland"]
+backend-linuxkms = ["i-slint-backend-linuxkms"]
 
-renderer-winit-femtovg = ["i-slint-backend-winit/renderer-winit-femtovg"]
-renderer-winit-skia = ["i-slint-backend-winit/renderer-winit-skia"]
-renderer-winit-skia-opengl = ["i-slint-backend-winit/renderer-winit-skia-opengl"]
-renderer-winit-software = ["i-slint-backend-winit/renderer-winit-software"]
+renderer-femtovg = ["i-slint-backend-winit?/renderer-femtovg", "i-slint-backend-linuxkms?/renderer-femtovg"]
+renderer-skia = ["i-slint-backend-winit?/renderer-skia", "i-slint-backend-linuxkms?/renderer-skia"]
+renderer-skia-opengl = ["i-slint-backend-winit?/renderer-skia-opengl", "i-slint-backend-linuxkms?/renderer-skia-opengl", "i-slint-renderer-skia/opengl"]
+renderer-skia-vulkan = ["i-slint-backend-winit?/renderer-skia-vulkan", "i-slint-backend-linuxkms?/renderer-skia-vulkan", "i-slint-renderer-skia/vulkan"]
+renderer-software = ["i-slint-backend-winit?/renderer-software", "i-slint-core/software-renderer"]
 
-rtti = ["i-slint-backend-winit?/rtti", "i-slint-backend-qt?/rtti"]
+rtti = ["i-slint-core/rtti", "i-slint-backend-qt?/rtti"]
+accessibility = ["i-slint-backend-winit?/accessibility"]
 
 [dependencies]
-i-slint-core = { version = "=1.0.3", path = "../../../internal/core", default-features = false }
-i-slint-backend-winit = { version = "=1.0.3", path = "../winit", optional = true }
-i-slint-backend-qt = { version = "=1.0.3", path = "../qt", optional = true }
+i-slint-core = { version = "=1.2.0", path = "../../../internal/core", default-features = false }
+i-slint-backend-winit = { version = "=1.2.0", path = "../winit", optional = true }
+i-slint-backend-qt = { version = "=1.2.0", path = "../qt", optional = true }
+i-slint-backend-linuxkms = { version = "=1.2.0", path = "../linuxkms", optional = true }
+i-slint-renderer-skia = { version = "=1.2.0", path="../../renderers/skia", optional = true, default-features = false }
 
 cfg-if = "1"

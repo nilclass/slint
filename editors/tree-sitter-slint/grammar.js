@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 // cSpell: ignore mult prec
 
@@ -36,6 +36,7 @@ module.exports = grammar({
                 field("export", optional($._export_modifier)),
                 choice(
                     $.struct_definition,
+                    $.enum_definition,
                     $.global_definition,
                     $.component_definition,
                 ),
@@ -205,6 +206,18 @@ module.exports = grammar({
                 $.type_anon_struct,
             ),
 
+        enum_definition: ($) =>
+            seq(
+                "enum",
+                field("name", $._type_identifier),
+                "{",
+                commaSep(
+                    field("name", $.var_identifier),
+                ),
+                optional(","),
+                "}",
+            ),
+
         anon_struct: ($) =>
             prec(
                 100,
@@ -342,7 +355,7 @@ module.exports = grammar({
         type: ($) =>
             choice($._type_identifier, $.type_list, $.type_anon_struct),
 
-        for_range: ($) => choice($._int_number, $.value_list, $.var_identifier),
+        for_range: ($) => $._expression,
 
         _assignment_setup: ($) =>
             seq(
@@ -366,6 +379,7 @@ module.exports = grammar({
 
         _expression_body: ($) =>
             choice(
+                seq($._tr, optional($._accessor_postfix)),
                 seq($.value, optional($._accessor_postfix)),
                 seq($.function_call, optional($._accessor_postfix)),
                 $.var_identifier,
@@ -650,6 +664,19 @@ module.exports = grammar({
         // image_value: ($) => ???.
         relative_font_size_value: ($) =>
             seq(field("value", $._number), field("unit", "rem")),
+
+        // @tr(...)
+        _tr: ($) =>
+            seq(
+                "@",
+                field("name", "tr"),
+                "(",
+                optional(field("context", seq($.string_value, "=>"))),
+                $.string_value,
+                optional(seq("|", $.string_value, "%", $._expression)),
+                field("parameters", optional(seq(",", commaSep1($.parameter), optional(",")))),
+                ")"
+            ),
 
         _basic_value: ($) =>
             choice(

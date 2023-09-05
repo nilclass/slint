@@ -1,9 +1,10 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 // cspell:ignore descendents qobject qwidget
 
 use crate::accessible_generated::*;
+use crate::qt_window::QtWindow;
 
 use i_slint_core::accessibility::AccessibleStringProperty;
 use i_slint_core::item_tree::{ItemRc, ItemWeak};
@@ -23,7 +24,7 @@ use std::pin::Pin;
 const NAME: u32 = QAccessible_Text_Name;
 const DESCRIPTION: u32 = QAccessible_Text_Description;
 const VALUE: u32 = QAccessible_Text_Value;
-const CHECKED: u32 = QAccessible_Text_UserText as u32;
+const CHECKED: u32 = QAccessible_Text_UserText;
 const VALUE_MINIMUM: u32 = CHECKED + 1;
 const VALUE_MAXIMUM: u32 = VALUE_MINIMUM + 1;
 const VALUE_STEP: u32 = VALUE_MAXIMUM + 1;
@@ -275,10 +276,9 @@ cpp! {{
         Descendents(void *root_item) {
             rustDescendents = rust!(Descendents_ctor [root_item: *mut c_void as "void*"] ->
                     SharedVector<ItemRc> as "void*" {
-                let mut descendents = SharedVector::default();
                 i_slint_core::accessibility::accessible_descendents(
-                        &*(root_item as *mut ItemRc), &mut descendents);
-                descendents
+                        &*(root_item as *mut ItemRc))
+                .collect()
             });
         }
 
@@ -657,7 +657,7 @@ cpp! {{
         ~Slint_accessible_window()
         {
             rust!(Slint_accessible_window_dtor [m_rustWindow: *mut c_void as "void*"] {
-                alloc::rc::Weak::from_raw(m_rustWindow as _); // Consume the Weak we hold in our void*!
+                alloc::rc::Weak::from_raw(m_rustWindow as *const QtWindow); // Consume the Weak<QtWindow> we hold in our void*!
             });
         }
 

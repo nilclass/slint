@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 export Xxx := Rectangle {
 
@@ -10,4 +10,12 @@ export Xxx := Rectangle {
     callback bar(int) -> int;
     bar <=> foo.hello;
 //  ^error{Unknown property bar in Rectangle}
+
+
+    // #3085
+    callback row-pointer-event <=> dontexist;
+//                                 ^error{Unknown unqualified identifier 'dontexist'}
+//  ^^error{Binding to callback 'row-pointer-event' must bind to another callback}
+    row-pointer-event => {}
+//  ^error{Duplicated callback}
 }

@@ -1,16 +1,16 @@
-# Copyright © SixtyFPS GmbH <info@slint-ui.com>
-# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+# Copyright © SixtyFPS GmbH <info@slint.dev>
+# SPDX-License-Identifier: MIT
 
 [target.xtensa-esp32s3-none-elf]
 runner = "espflash --monitor"
-
-[build]
 rustflags = [
     "-C", "force-frame-pointers",
     "-C", "link-arg=-nostartfiles",
     "-C", "link-arg=-Wl,-Tlinkall.x",
     "-C", "target-feature=-fp",
 ]
+
+[build]
 target = "xtensa-esp32s3-none-elf"
 
 [unstable]

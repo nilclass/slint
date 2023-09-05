@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 import { Uri, TextDocumentShowOptions } from "vscode";
 import * as vscode from "vscode";
@@ -131,7 +131,7 @@ export async function showPreview(
 
 async function getDocumentSource(url: Uri): Promise<string> {
     // FIXME: is there a faster way to get the document
-    let x = vscode.workspace.textDocuments.find((d) => d.uri === url);
+    let x = vscode.workspace.textDocuments.find((d) => d.uri.toString() === url.toString());
     let source;
     if (x) {
         source = x.getText();
@@ -193,7 +193,7 @@ function extract_rust_macro(source: string): string {
     return result;
 }
 
-function getPreviewHtml(slint_wasm_interpreter_url: Uri): string {
+function getPreviewHtml(slint_wasm_preview_url: Uri): string {
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -202,7 +202,7 @@ function getPreviewHtml(slint_wasm_interpreter_url: Uri): string {
     <title>Slint Preview</title>
     <script type="module">
     "use strict";
-    import * as slint from '${slint_wasm_interpreter_url}';
+    import * as slint from '${slint_wasm_preview_url}';
     await slint.default();
 
     const vscode = acquireVsCodeApi();
@@ -237,20 +237,29 @@ function getPreviewHtml(slint_wasm_interpreter_url: Uri): string {
         if (component !== undefined) {
             document.getElementById("slint_error_div").innerHTML = "";
             if (current_instance !== null) {
-                current_instance = component.create_with_existing_window(current_instance);
+                current_instance = component.create_with_existing_window(await current_instance);
             } else {
-                current_instance = component.create("slint_canvas");
-                current_instance.show();
-                slint.run_event_loop();
+                try {
+                    slint.run_event_loop();
+                } catch (e) {
+                    // ignore winit event loop exception
+                }
+                current_instance = (async () => {
+                    let new_instance = await component.create("slint_canvas");
+                    await new_instance.show();
+                    return new_instance;
+                })();
             }
-            current_instance?.set_design_mode(design_mode);
-            current_instance?.on_element_selected(element_selected);
+            if (current_instance !== null) {
+                (await current_instance).set_design_mode(design_mode);
+                (await current_instance).on_element_selected(element_selected);
+            }
         }
     }
 
     window.addEventListener('message', async event => {
         if (event.data.command === "preview") {
-            design_mode = event.data.design_mode;
+            design_mode = !!event.data.design_mode;
             vscode.setState({base_url: event.data.base_url, component: event.data.component});
             await render(event.data.content, event.data.webview_uri, event.data.style);
         } else if (event.data.command === "file_loaded") {
@@ -261,12 +270,14 @@ function getPreviewHtml(slint_wasm_interpreter_url: Uri): string {
             }
         } else if (event.data.command === "highlight") {
             if (current_instance) {
-                current_instance.highlight(event.data.data.path, event.data.data.offset);
+                (await current_instance).highlight(event.data.data.path, event.data.data.offset);
             }
         } else if (event.data.command === "toggle_design_mode") {
             design_mode = !design_mode;
-            current_instance?.set_design_mode(design_mode);
-            current_instance?.on_element_selected(element_selected);
+            if (current_instance != null) {
+                (await current_instance).set_design_mode(design_mode);
+                (await current_instance).on_element_selected(element_selected);
+            }
         }
     });
 
@@ -290,12 +301,14 @@ export class PreviewSerializer implements vscode.WebviewPanelSerializer {
         state: any,
     ) {
         initPreviewPanel(this.context, webviewPanel);
-        previewUrl = Uri.parse(state.base_url, true);
+        if (state) {
+            previewUrl = Uri.parse(state.base_url, true);
 
-        if (previewUrl) {
-            let content_str = await getDocumentSource(previewUrl);
-            previewComponent = state.component ?? "";
-            reload_preview(previewUrl, content_str, previewComponent);
+            if (previewUrl) {
+                let content_str = await getDocumentSource(previewUrl);
+                previewComponent = state.component ?? "";
+                reload_preview(previewUrl, content_str, previewComponent);
+            }
         }
     }
 }
@@ -369,10 +382,13 @@ function initPreviewPanel(
         undefined,
         context.subscriptions,
     );
-    let slint_wasm_interpreter_url = panel.webview.asWebviewUri(
-        Uri.joinPath(context.extensionUri, "out/slint_wasm_interpreter.js"),
+    const lsp_wasm_url = Uri.joinPath(
+        context.extensionUri,
+        "out/slint_lsp_wasm.js",
     );
-    panel.webview.html = getPreviewHtml(slint_wasm_interpreter_url);
+    panel.webview.html = getPreviewHtml(
+        panel.webview.asWebviewUri(lsp_wasm_url),
+    );
     panel.onDidDispose(
         () => {
             previewPanel = null;

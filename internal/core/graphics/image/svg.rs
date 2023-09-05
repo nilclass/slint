@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 #![cfg(feature = "svg")]
 
@@ -7,11 +7,14 @@ use super::{ImageCacheKey, SharedImageBuffer, SharedPixelBuffer};
 use crate::lengths::PhysicalPx;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::SharedString;
-use resvg::{tiny_skia, usvg};
+use resvg::{
+    tiny_skia,
+    usvg::{self, TreeTextToPath},
+};
 use usvg::TreeParsing;
 
 pub struct ParsedSVG {
-    svg_tree: usvg::Tree,
+    svg_tree: resvg::Tree,
     cache_key: ImageCacheKey,
 }
 
@@ -32,7 +35,7 @@ impl core::fmt::Debug for ParsedSVG {
 
 impl ParsedSVG {
     pub fn size(&self) -> crate::graphics::IntSize {
-        let size = self.svg_tree.size.to_screen_size();
+        let size = self.svg_tree.size.to_int_size();
         [size.width(), size.height()].into()
     }
 
@@ -41,37 +44,48 @@ impl ParsedSVG {
     }
 
     /// Renders the SVG with the specified size.
+    #[allow(clippy::unnecessary_cast)] // Coord
     pub fn render(
         &self,
         size: euclid::Size2D<u32, PhysicalPx>,
     ) -> Result<SharedImageBuffer, usvg::Error> {
         let tree = &self.svg_tree;
-        let fit = resvg::FitTo::Size(size.width, size.height);
-        let size = fit.fit_to(tree.size.to_screen_size()).ok_or(usvg::Error::InvalidSize)?;
-        let mut buffer = SharedPixelBuffer::new(size.width(), size.height());
-        let skia_buffer =
-            tiny_skia::PixmapMut::from_bytes(buffer.make_mut_bytes(), size.width(), size.height())
-                .ok_or(usvg::Error::InvalidSize)?;
-        resvg::render(tree, fit, Default::default(), skia_buffer)
-            .ok_or(usvg::Error::InvalidSize)?;
+
+        let target_size = tree.size.to_int_size().scale_to(
+            tiny_skia::IntSize::from_wh(size.width, size.height).ok_or(usvg::Error::InvalidSize)?,
+        );
+        let target_size_f = target_size.to_size();
+
+        let transform = tiny_skia::Transform::from_scale(
+            target_size_f.width() as f32 / tree.size.width() as f32,
+            target_size_f.height() as f32 / tree.size.height() as f32,
+        );
+
+        let mut buffer = SharedPixelBuffer::new(target_size.width(), target_size.height());
+        let mut skia_buffer = tiny_skia::PixmapMut::from_bytes(
+            buffer.make_mut_bytes(),
+            target_size.width(),
+            target_size.height(),
+        )
+        .ok_or(usvg::Error::InvalidSize)?;
+
+        tree.render(transform, &mut skia_buffer);
         Ok(SharedImageBuffer::RGBA8Premultiplied(buffer))
     }
 }
 
 fn with_svg_options<T>(callback: impl FnOnce(&usvg::Options) -> T) -> T {
-    // TODO: When the font db cache is a feature in corelib, use it:
-    /*
-    crate::fonts::FONT_CACHE.with(|cache| {
-        let options = usvg::Options::default();
-        let mut options_ref = options.to_ref();
-        let cache = cache.borrow();
-        options_ref.fontdb = &cache.available_fonts;
-        callback(options_ref)
-    })
-    */
-
     let options = usvg::Options::default();
     callback(&options)
+}
+
+fn fixup_text(mut tree: usvg::Tree) -> usvg::Tree {
+    if tree.has_text_nodes() {
+        i_slint_common::sharedfontdb::FONT_DB.with(|db| {
+            tree.convert_text(&db.borrow());
+        })
+    }
+    tree
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -83,6 +97,8 @@ pub fn load_from_path(
 
     with_svg_options(|options| {
         usvg::Tree::from_data(&svg_data, options)
+            .map(fixup_text)
+            .map(|usvg_tree| resvg::Tree::from_usvg(&usvg_tree))
             .map(|svg| ParsedSVG { svg_tree: svg, cache_key })
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
     })
@@ -90,6 +106,9 @@ pub fn load_from_path(
 
 pub fn load_from_data(slice: &[u8], cache_key: ImageCacheKey) -> Result<ParsedSVG, usvg::Error> {
     with_svg_options(|options| {
-        usvg::Tree::from_data(slice, options).map(|svg| ParsedSVG { svg_tree: svg, cache_key })
+        usvg::Tree::from_data(slice, options)
+            .map(fixup_text)
+            .map(|usvg_tree| resvg::Tree::from_usvg(&usvg_tree))
+            .map(|svg| ParsedSVG { svg_tree: svg, cache_key })
     })
 }

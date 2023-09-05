@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 #![cfg(doc)]
 /*!
@@ -100,16 +100,17 @@ pub mod generated_code {
             unimplemented!();
         }
 
-        /// Marks the window of this component to be shown on the screen. This registers
-        /// the window with the windowing system. In order to react to events from the windowing system,
-        /// such as draw requests or mouse/touch input, it is still necessary to spin the event loop,
-        /// using [`crate::run_event_loop`].
+        /// Convenience function for [`crate::Window::show()`]. This shows the window on the screen
+        /// and maintains an extra strong reference while the window is visible. To react
+        /// to events from the windowing system, such as draw requests or mouse/touch input, it is
+        /// still necessary to spin the event loop, using [`crate::run_event_loop`].
         fn show(&self) -> Result<(), crate::PlatformError> {
             unimplemented!();
         }
 
-        /// Marks the window of this component to be hidden on the screen. This de-registers
-        /// the window from the windowing system and it will not receive any further events.
+        /// Convenience function for [`crate::Window::hide()`]. Hides the window, so that it is not
+        /// visible anymore. The additional strong reference on the associated component, that was
+        /// created when show() was called, is dropped.
         fn hide(&self) -> Result<(), crate::PlatformError> {
             unimplemented!();
         }
@@ -134,11 +135,6 @@ pub mod generated_code {
     }
 }
 
-pub mod debugging_techniques {
-    #![doc = include_str!("docs/debugging_techniques.md")]
-    #![doc = ""]
-}
-
 pub mod mcu {
     #![doc = include_str!("mcu.md")]
     use crate::platform::software_renderer::*;
@@ -146,4 +142,20 @@ pub mod mcu {
     mod slint {
         pub use crate::*;
     }
+}
+
+pub mod cargo_features {
+    //! # Feature flags and backend selection.
+    //! Use the following feature flags in your Cargo.toml to enable additional features.
+    //!
+    #![cfg_attr(feature = "document-features", doc = document_features::document_features!())]
+    //!
+    //! More information about the backends is available in the
+    #![doc = concat!("[Slint Documentation](https://slint.dev/releases/", env!("CARGO_PKG_VERSION"), "/docs/slint/src/advanced/backends.html)")]
+    use crate::*;
+}
+
+pub mod type_mappings {
+    #![doc = include_str!("type-mappings.md")]
+    use crate::*;
 }

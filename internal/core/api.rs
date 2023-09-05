@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 /*!
 This module contains types that are public and re-exported in the slint-rs as well as the slint-interpreter crate as public API.
@@ -7,16 +7,18 @@ This module contains types that are public and re-exported in the slint-rs as we
 
 #![warn(missing_docs)]
 
-use alloc::boxed::Box;
-use alloc::string::String;
-
 use crate::component::ComponentVTable;
+#[cfg(target_has_atomic = "ptr")]
+pub use crate::future::*;
 use crate::input::{KeyEventType, KeyInputEvent, MouseEvent};
 use crate::window::{WindowAdapter, WindowInner};
+use alloc::boxed::Box;
+use alloc::string::String;
 
 /// A position represented in the coordinate space of logical pixels. That is the space before applying
 /// a display device specific scale factor.
 #[derive(Debug, Default, Copy, Clone, PartialEq)]
+#[repr(C)]
 pub struct LogicalPosition {
     /// The x coordinate.
     pub x: f32,
@@ -43,8 +45,11 @@ impl LogicalPosition {
         PhysicalPosition::from_logical(*self, scale_factor)
     }
 
-    pub(crate) fn to_euclid(&self) -> crate::lengths::LogicalPoint {
+    pub(crate) fn to_euclid(self) -> crate::lengths::LogicalPoint {
         [self.x as _, self.y as _].into()
+    }
+    pub(crate) fn from_euclid(p: crate::lengths::LogicalPoint) -> Self {
+        Self::new(p.x as _, p.y as _)
     }
 }
 
@@ -81,6 +86,11 @@ impl PhysicalPosition {
     pub(crate) fn to_euclid(&self) -> crate::graphics::euclid::default::Point2D<i32> {
         [self.x, self.y].into()
     }
+
+    #[cfg(feature = "ffi")]
+    pub(crate) fn from_euclid(p: crate::graphics::euclid::default::Point2D<i32>) -> Self {
+        Self::new(p.x as _, p.y as _)
+    }
 }
 
 /// The position of the window in either physical or logical pixels. This is used
@@ -97,7 +107,7 @@ impl WindowPosition {
     /// Turn the `WindowPosition` into a `PhysicalPosition`.
     pub fn to_physical(&self, scale_factor: f32) -> PhysicalPosition {
         match self {
-            WindowPosition::Physical(pos) => pos.clone(),
+            WindowPosition::Physical(pos) => *pos,
             WindowPosition::Logical(pos) => pos.to_physical(scale_factor),
         }
     }
@@ -105,6 +115,7 @@ impl WindowPosition {
 
 /// A size represented in the coordinate space of logical pixels. That is the space before applying
 /// a display device specific scale factor.
+#[repr(C)]
 #[derive(Debug, Default, Copy, Clone, PartialEq)]
 pub struct LogicalSize {
     /// The width in logical pixels.
@@ -135,7 +146,7 @@ impl LogicalSize {
         PhysicalSize::from_logical(*self, scale_factor)
     }
 
-    pub(crate) fn to_euclid(&self) -> crate::lengths::LogicalSize {
+    pub(crate) fn to_euclid(self) -> crate::lengths::LogicalSize {
         [self.width as _, self.height as _].into()
     }
 }
@@ -192,7 +203,7 @@ impl WindowSize {
     /// Turn the `WindowSize` into a `PhysicalSize`.
     pub fn to_physical(&self, scale_factor: f32) -> PhysicalSize {
         match self {
-            WindowSize::Physical(size) => size.clone(),
+            WindowSize::Physical(size) => *size,
             WindowSize::Logical(size) => size.to_physical(scale_factor),
         }
     }
@@ -201,9 +212,33 @@ impl WindowSize {
     pub fn to_logical(&self, scale_factor: f32) -> LogicalSize {
         match self {
             WindowSize::Physical(size) => size.to_logical(scale_factor),
-            WindowSize::Logical(size) => size.clone(),
+            WindowSize::Logical(size) => *size,
         }
     }
+}
+
+#[test]
+fn logical_physical_pos() {
+    use crate::graphics::euclid::approxeq::ApproxEq;
+
+    let phys = PhysicalPosition::new(100, 50);
+    let logical = phys.to_logical(2.);
+    assert!(logical.x.approx_eq(&50.));
+    assert!(logical.y.approx_eq(&25.));
+
+    assert_eq!(logical.to_physical(2.), phys);
+}
+
+#[test]
+fn logical_physical_size() {
+    use crate::graphics::euclid::approxeq::ApproxEq;
+
+    let phys = PhysicalSize::new(100, 50);
+    let logical = phys.to_logical(2.);
+    assert!(logical.width.approx_eq(&50.));
+    assert!(logical.height.approx_eq(&25.));
+
+    assert_eq!(logical.to_physical(2.), phys);
 }
 
 /// This enum describes a low-level access to specific graphics APIs used
@@ -240,7 +275,7 @@ impl<'a> core::fmt::Debug for GraphicsAPI<'a> {
 /// This enum describes the different rendering states, that will be provided
 /// to the parameter of the callback for `set_rendering_notifier` on the `slint::Window`.
 #[derive(Debug, Clone)]
-#[repr(C)]
+#[repr(u8)]
 #[non_exhaustive]
 pub enum RenderingState {
     /// The window has been created and the graphics adapter/context initialized. When OpenGL
@@ -272,9 +307,9 @@ impl<F: FnMut(RenderingState, &GraphicsAPI)> RenderingNotifier for F {
 }
 
 /// This enum describes the different error scenarios that may occur when the application
-/// registers a rendering notifier on a [`crate::Window`](struct.Window.html).
+/// registers a rendering notifier on a `slint::Window`.
 #[derive(Debug, Clone)]
-#[repr(C)]
+#[repr(u8)]
 #[non_exhaustive]
 pub enum SetRenderingNotifierError {
     /// The rendering backend does not support rendering notifiers.
@@ -292,7 +327,7 @@ pub struct Window(pub(crate) WindowInner);
 /// This enum describes whether a Window is allowed to be hidden when the user tries to close the window.
 /// It is the return type of the callback provided to [Window::on_close_requested].
 #[derive(Copy, Clone, Debug, PartialEq, Default)]
-#[repr(C)]
+#[repr(u8)]
 pub enum CloseRequestResponse {
     /// The Window will be hidden (default action)
     #[default]
@@ -304,8 +339,7 @@ pub enum CloseRequestResponse {
 impl Window {
     /// Create a new window from a window adapter
     ///
-    /// You only need to create the window yourself when you create a
-    /// [`WindowAdapter`](crate::platform::WindowAdapter) from
+    /// You only need to create the window yourself when you create a [`WindowAdapter`] from
     /// [`Platform::create_window_adapter`](crate::platform::Platform::create_window_adapter)
     ///
     /// Since the window adapter must own the Window, this function is meant to be used with
@@ -314,19 +348,17 @@ impl Window {
     /// # Example
     /// ```rust
     /// use std::rc::Rc;
-    /// use slint::platform::WindowAdapter;
-    /// use slint::Window;
+    /// use slint::platform::{WindowAdapter, Renderer};
+    /// use slint::{Window, PhysicalSize};
     /// struct MyWindowAdapter {
     ///     window: Window,
     ///     //...
     /// }
     /// impl WindowAdapter for MyWindowAdapter {
     ///    fn window(&self) -> &Window { &self.window }
-    ///    //...
+    ///    fn size(&self) -> PhysicalSize { unimplemented!() }
+    ///    fn renderer(&self) -> &dyn Renderer { unimplemented!() }
     /// }
-    /// # impl i_slint_core::window::WindowAdapterSealed for MyWindowAdapter {
-    /// #   fn renderer(&self) -> &dyn i_slint_core::renderer::Renderer { unimplemented!() }
-    /// # }
     ///
     /// fn create_window_adapter() -> Rc<dyn WindowAdapter> {
     ///    Rc::<MyWindowAdapter>::new_cyclic(|weak| {
@@ -337,17 +369,22 @@ impl Window {
     ///    })
     /// }
     /// ```
-    #[doc(hidden)]
     pub fn new(window_adapter_weak: alloc::rc::Weak<dyn WindowAdapter>) -> Self {
         Self(WindowInner::new(window_adapter_weak))
     }
 
-    /// Registers the window with the windowing system in order to make it visible on the screen.
+    /// Shows the window on the screen. An additional strong reference on the
+    /// associated component is maintained while the window is visible.
+    ///
+    /// Call [`Self::hide()`] to make the window invisible again, and drop the additional
+    /// strong reference.
     pub fn show(&self) -> Result<(), PlatformError> {
         self.0.show()
     }
 
-    /// De-registers the window from the windowing system, therefore hiding it.
+    /// Hides the window, so that it is not visible anymore. The additional strong
+    /// reference on the associated component, that was created when [`Self::show()`] was called, is
+    /// dropped.
     pub fn hide(&self) -> Result<(), PlatformError> {
         self.0.hide()
     }
@@ -369,7 +406,7 @@ impl Window {
 
     /// This function issues a request to the windowing system to redraw the contents of the window.
     pub fn request_redraw(&self) {
-        self.0.window_adapter().request_redraw();
+        self.0.window_adapter().request_redraw()
     }
 
     /// This function returns the scale factor that allows converting between logical and
@@ -381,7 +418,7 @@ impl Window {
     /// Returns the position of the window on the screen, in physical screen coordinates and including
     /// a window frame (if present).
     pub fn position(&self) -> PhysicalPosition {
-        self.0.window_adapter().position()
+        self.0.window_adapter().position().unwrap_or_default()
     }
 
     /// Sets the position of the window on the screen, in physical screen coordinates and including
@@ -395,20 +432,14 @@ impl Window {
     /// Returns the size of the window on the screen, in physical screen coordinates and excluding
     /// a window frame (if present).
     pub fn size(&self) -> PhysicalSize {
-        self.0.inner_size.get()
+        self.0.window_adapter().size()
     }
 
     /// Resizes the window to the specified size on the screen, in physical pixels and excluding
     /// a window frame (if present).
     pub fn set_size(&self, size: impl Into<WindowSize>) {
         let size = size.into();
-        let l = size.to_logical(self.scale_factor()).to_euclid();
-        let p = size.to_physical(self.scale_factor());
-
-        self.0.set_window_item_geometry(l);
-        if self.0.inner_size.replace(p) != p {
-            self.0.window_adapter().set_size(size);
-        }
+        crate::window::WindowAdapter::set_size(&*self.0.window_adapter(), size);
     }
 
     /// Dispatch a window event to the scene.
@@ -417,6 +448,7 @@ impl Window {
     ///
     /// Any position fields in the event must be in the logical pixel coordinate system relative to
     /// the top left corner of the window.
+    // TODO: Return a Result<(), PlatformError>
     pub fn dispatch_event(&self, event: crate::platform::WindowEvent) {
         match event {
             crate::platform::WindowEvent::PointerPressed { position, button } => {
@@ -451,18 +483,35 @@ impl Window {
 
             crate::platform::WindowEvent::KeyPressed { text } => {
                 self.0.process_key_input(KeyInputEvent {
-                    text: SharedString::from(text),
+                    text,
                     event_type: KeyEventType::KeyPressed,
                     ..Default::default()
                 })
             }
             crate::platform::WindowEvent::KeyReleased { text } => {
                 self.0.process_key_input(KeyInputEvent {
-                    text: SharedString::from(text),
+                    text,
                     event_type: KeyEventType::KeyReleased,
                     ..Default::default()
                 })
             }
+            crate::platform::WindowEvent::ScaleFactorChanged { scale_factor } => {
+                self.0.set_scale_factor(scale_factor);
+            }
+            crate::platform::WindowEvent::Resized { size } => {
+                self.0.set_window_item_geometry(size.to_euclid());
+                self.0
+                    .window_adapter()
+                    .renderer()
+                    .resize(size.to_physical(self.scale_factor()))
+                    .unwrap()
+            }
+            crate::platform::WindowEvent::CloseRequested => {
+                if self.0.request_close() {
+                    self.hide().unwrap();
+                }
+            }
+            crate::platform::WindowEvent::WindowActiveChanged(bool) => self.0.set_active(bool),
         }
     }
 
@@ -475,7 +524,7 @@ impl Window {
     /// Returns the visibility state of the window. This function can return false even if you previously called show()
     /// on it, for example if the user minimized the window.
     pub fn is_visible(&self) -> bool {
-        self.0.window_adapter().is_visible()
+        self.0.is_visible()
     }
 }
 
@@ -513,7 +562,7 @@ pub use crate::SharedString;
 /// Palette::get(&app).set_foreground_color(slint::Color::from_rgb_u8(255, 255, 255));
 /// ```
 ///
-#[doc = concat!("See also the [language documentation for global singletons](https://slint-ui.com/releases/", env!("CARGO_PKG_VERSION"), "/docs/slint/src/reference/globals.html) for more information.")]
+#[doc = concat!("See also the [language documentation for global singletons](https://slint.dev/releases/", env!("CARGO_PKG_VERSION"), "/docs/slint/src/reference/globals.html) for more information.")]
 ///
 /// **Note:** Only globals that are exported or re-exported from the main .slint file will
 /// be exposed in the API
@@ -544,14 +593,16 @@ pub trait ComponentHandle {
     #[doc(hidden)]
     fn from_inner(_: vtable::VRc<ComponentVTable, Self::Inner>) -> Self;
 
-    /// Marks the window of this component to be shown on the screen. This registers
-    /// the window with the windowing system. In order to react to events from the windowing system,
-    /// such as draw requests or mouse/touch input, it is still necessary to spin the event loop,
+    /// Convenience function for [`crate::Window::show()`](struct.Window.html#method.show).
+    /// This shows the window on the screen and maintains an extra strong reference while
+    /// the window is visible. To react to events from the windowing system, such as draw
+    /// requests or mouse/touch input, it is still necessary to spin the event loop,
     /// using [`crate::run_event_loop`](fn.run_event_loop.html).
     fn show(&self) -> Result<(), PlatformError>;
 
-    /// Marks the window of this component to be hidden on the screen. This de-registers
-    /// the window from the windowing system and it will not receive any further events.
+    /// Convenience function for [`crate::Window::hide()`](struct.Window.html#method.hide).
+    /// Hides the window, so that it is not visible anymore. The additional strong reference
+    /// on the associated component, that was created when show() was called, is dropped.
     fn hide(&self) -> Result<(), PlatformError>;
 
     /// Returns the Window associated with this component. The window API can be used
@@ -590,6 +641,16 @@ mod weak_handle {
         inner: vtable::VWeak<ComponentVTable, T::Inner>,
         #[cfg(feature = "std")]
         thread: std::thread::ThreadId,
+    }
+
+    impl<T: ComponentHandle> Default for Weak<T> {
+        fn default() -> Self {
+            Self {
+                inner: vtable::VWeak::default(),
+                #[cfg(feature = "std")]
+                thread: std::thread::current().id(),
+            }
+        }
     }
 
     impl<T: ComponentHandle> Clone for Weak<T> {
@@ -634,6 +695,12 @@ mod weak_handle {
         /// Otherwise, this function panics.
         pub fn unwrap(&self) -> T {
             self.upgrade().unwrap()
+        }
+
+        /// A helper function to allow creation on `component_factory::Component` from
+        /// a `ComponentHandle`
+        pub(crate) fn inner(&self) -> vtable::VWeak<ComponentVTable, T::Inner> {
+            self.inner.clone()
         }
 
         /// Convenience function that combines [`invoke_from_event_loop()`] with [`Self::upgrade()`]
@@ -725,6 +792,8 @@ pub fn invoke_from_event_loop(func: impl FnOnce() + Send + 'static) -> Result<()
 /// to be called from callbacks triggered by the UI. After calling the function,
 /// it will return immediately and once control is passed back to the event loop,
 /// the initial call to `slint::run_event_loop()` will return.
+///
+/// This function can be called from any thread
 pub fn quit_event_loop() -> Result<(), EventLoopError> {
     crate::platform::event_loop_proxy()
         .ok_or(EventLoopError::NoEventLoopProvider)?
@@ -740,6 +809,19 @@ pub enum EventLoopError {
     /// The event could not be sent because the Slint platform abstraction was not yet initialized,
     /// or the platform does not support event loop.
     NoEventLoopProvider,
+}
+
+impl core::fmt::Display for EventLoopError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            EventLoopError::EventLoopTerminated => {
+                f.write_str("The event loop was already terminated")
+            }
+            EventLoopError::NoEventLoopProvider => {
+                f.write_str("The Slint platform do not provide an event loop")
+            }
+        }
+    }
 }
 
 /// The platform encountered a fatal error.
@@ -771,6 +853,9 @@ pub enum PlatformError {
 
     /// Another platform-specific error occurred
     Other(String),
+    /// Another platform-specific error occurred.
+    #[cfg(feature = "std")]
+    OtherError(Box<dyn std::error::Error + Send + Sync>),
 }
 
 impl core::fmt::Display for PlatformError {
@@ -786,6 +871,8 @@ impl core::fmt::Display for PlatformError {
                 f.write_str("The Slint platform was initialized in another thread")
             }
             PlatformError::Other(str) => f.write_str(str),
+            #[cfg(feature = "std")]
+            PlatformError::OtherError(error) => error.fmt(f),
         }
     }
 }
@@ -802,28 +889,24 @@ impl From<&str> for PlatformError {
 }
 
 #[cfg(feature = "std")]
-impl std::error::Error for PlatformError {}
+impl From<Box<dyn std::error::Error + Send + Sync>> for PlatformError {
+    fn from(error: Box<dyn std::error::Error + Send + Sync>) -> Self {
+        Self::OtherError(error)
+    }
+}
 
-#[test]
-fn logical_physical_pos() {
-    use crate::graphics::euclid::approxeq::ApproxEq;
-
-    let phys = PhysicalPosition::new(100, 50);
-    let logical = phys.to_logical(2.);
-    assert!(logical.x.approx_eq(&50.));
-    assert!(logical.y.approx_eq(&25.));
-
-    assert_eq!(logical.to_physical(2.), phys);
+#[cfg(feature = "std")]
+impl std::error::Error for PlatformError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            PlatformError::OtherError(err) => Some(err.as_ref()),
+            _ => None,
+        }
+    }
 }
 
 #[test]
-fn logical_physical_size() {
-    use crate::graphics::euclid::approxeq::ApproxEq;
-
-    let phys = PhysicalSize::new(100, 50);
-    let logical = phys.to_logical(2.);
-    assert!(logical.width.approx_eq(&50.));
-    assert!(logical.height.approx_eq(&25.));
-
-    assert_eq!(logical.to_physical(2.), phys);
+#[cfg(feature = "std")]
+fn error_is_send() {
+    let _: Box<dyn std::error::Error + Send + Sync + 'static> = PlatformError::NoPlatform.into();
 }

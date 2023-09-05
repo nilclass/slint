@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 /*!
 This module contains the builtin text related items.
@@ -7,7 +7,6 @@ This module contains the builtin text related items.
 When adding an item or a property, it needs to be kept in sync with different place.
 Lookup the [`crate::items`] module documentation.
 */
-
 use super::{
     InputType, Item, ItemConsts, ItemRc, KeyEventResult, KeyEventType, PointArg,
     PointerEventButton, RenderingResult, TextHorizontalAlignment, TextOverflow,
@@ -24,7 +23,7 @@ use crate::lengths::{LogicalLength, LogicalPoint, LogicalRect, LogicalSize, Scal
 use crate::platform::Clipboard;
 #[cfg(feature = "rtti")]
 use crate::rtti::*;
-use crate::window::{WindowAdapter, WindowInner};
+use crate::window::{InputMethodRequest, WindowAdapter, WindowInner};
 use crate::{Callback, Coord, Property, SharedString};
 use alloc::rc::Rc;
 use alloc::string::String;
@@ -35,7 +34,6 @@ use core::pin::Pin;
 use euclid::num::Ceil;
 use i_slint_core_macros::*;
 use unicode_segmentation::UnicodeSegmentation;
-
 /// The implementation of the `Text` element
 #[repr(C)]
 #[derive(FieldOffsets, Default, SlintElement)]
@@ -45,6 +43,7 @@ pub struct Text {
     pub font_family: Property<SharedString>,
     pub font_size: Property<LogicalLength>,
     pub font_weight: Property<i32>,
+    pub font_italic: Property<bool>,
     pub color: Property<Brush>,
     pub horizontal_alignment: Property<TextHorizontalAlignment>,
     pub vertical_alignment: Property<TextVerticalAlignment>,
@@ -59,7 +58,7 @@ pub struct Text {
 }
 
 impl Item for Text {
-    fn init(self: Pin<&Self>, _window_adapter: &Rc<dyn WindowAdapter>) {}
+    fn init(self: Pin<&Self>, _self_rc: &ItemRc) {}
 
     fn geometry(self: Pin<&Self>) -> LogicalRect {
         LogicalRect::new(
@@ -205,6 +204,7 @@ impl Text {
                 }
             },
             letter_spacing: Some(self.letter_spacing()),
+            italic: self.font_italic(),
         }
     }
 }
@@ -218,6 +218,7 @@ pub struct TextInput {
     pub font_family: Property<SharedString>,
     pub font_size: Property<LogicalLength>,
     pub font_weight: Property<i32>,
+    pub font_italic: Property<bool>,
     pub color: Property<Brush>,
     pub selection_foreground_color: Property<Color>,
     pub selection_background_color: Property<Color>,
@@ -253,7 +254,7 @@ pub struct TextInput {
 }
 
 impl Item for TextInput {
-    fn init(self: Pin<&Self>, _window_adapter: &Rc<dyn WindowAdapter>) {}
+    fn init(self: Pin<&Self>, _self_rc: &ItemRc) {}
 
     // FIXME: width / height.  or maybe it doesn't matter?  (
     fn geometry(self: Pin<&Self>) -> LogicalRect {
@@ -331,13 +332,15 @@ impl Item for TextInput {
         }
         match event {
             MouseEvent::Pressed { position, button: PointerEventButton::Left, click_count } => {
-                let clicked_offset =
-                    window_adapter.renderer().text_input_byte_offset_for_position(self, position)
-                        as i32;
+                let clicked_offset = self.byte_offset_for_position(position, window_adapter) as i32;
                 self.as_ref().pressed.set((click_count % 3) + 1);
 
                 if !window_adapter.window().0.modifiers.get().shift() {
                     self.as_ref().anchor_position_byte_offset.set(clicked_offset);
+                }
+
+                if !self.has_focus() {
+                    WindowInner::from_pub(window_adapter.window()).set_focus_item(self_rc);
                 }
 
                 match click_count % 3 {
@@ -347,38 +350,35 @@ impl Item for TextInput {
                     _ => unreachable!(),
                 };
 
-                if !self.has_focus() {
-                    WindowInner::from_pub(window_adapter.window()).set_focus_item(self_rc);
-                }
                 return InputEventResult::GrabMouse;
             }
             MouseEvent::Pressed { position, button: PointerEventButton::Middle, .. } => {
-                let clicked_offset =
-                    window_adapter.renderer().text_input_byte_offset_for_position(self, position)
-                        as i32;
+                let clicked_offset = self.byte_offset_for_position(position, window_adapter) as i32;
                 self.as_ref().anchor_position_byte_offset.set(clicked_offset);
-                self.set_cursor_position(clicked_offset, true, window_adapter, self_rc);
-                self.paste(window_adapter, self_rc, Clipboard::SelectionClipboard);
                 if !self.has_focus() {
                     WindowInner::from_pub(window_adapter.window()).set_focus_item(self_rc);
                 }
+                self.set_cursor_position(clicked_offset, true, window_adapter, self_rc);
+                self.paste_clipboard(window_adapter, self_rc, Clipboard::SelectionClipboard);
             }
             MouseEvent::Released { button: PointerEventButton::Left, .. } => {
                 self.as_ref().pressed.set(0);
-                self.copy(Clipboard::SelectionClipboard);
+                self.copy_clipboard(Clipboard::SelectionClipboard);
             }
             MouseEvent::Exit => {
-                window_adapter.set_mouse_cursor(super::MouseCursor::Default);
+                if let Some(x) = window_adapter.internal(crate::InternalToken) {
+                    x.set_mouse_cursor(super::MouseCursor::Default);
+                }
                 self.as_ref().pressed.set(0)
             }
             MouseEvent::Moved { position } => {
-                window_adapter.set_mouse_cursor(super::MouseCursor::Text);
+                if let Some(x) = window_adapter.internal(crate::InternalToken) {
+                    x.set_mouse_cursor(super::MouseCursor::Text);
+                }
                 let pressed = self.as_ref().pressed.get();
                 if pressed > 0 {
-                    let clicked_offset = window_adapter
-                        .renderer()
-                        .text_input_byte_offset_for_position(self, position)
-                        as i32;
+                    let clicked_offset =
+                        self.byte_offset_for_position(position, window_adapter) as i32;
 
                     self.set_cursor_position(clicked_offset, true, window_adapter, self_rc);
                     match (pressed - 1) % 3 {
@@ -479,31 +479,29 @@ impl Item for TextInput {
                 {
                     return KeyEventResult::EventIgnored;
                 }
-                match event.shortcut() {
-                    Some(shortcut) => match shortcut {
+                if let Some(shortcut) = event.shortcut() {
+                    match shortcut {
                         StandardShortcut::SelectAll => {
                             self.select_all(window_adapter, self_rc);
                             return KeyEventResult::EventAccepted;
                         }
                         StandardShortcut::Copy => {
-                            self.copy(Clipboard::DefaultClipboard);
+                            self.copy(window_adapter, self_rc);
                             return KeyEventResult::EventAccepted;
                         }
                         StandardShortcut::Paste if !self.read_only() => {
-                            self.paste(window_adapter, self_rc, Clipboard::DefaultClipboard);
+                            self.paste(window_adapter, self_rc);
                             return KeyEventResult::EventAccepted;
                         }
                         StandardShortcut::Cut if !self.read_only() => {
-                            self.copy(Clipboard::DefaultClipboard);
-                            self.delete_selection(window_adapter, self_rc);
+                            self.cut(window_adapter, self_rc);
                             return KeyEventResult::EventAccepted;
                         }
                         StandardShortcut::Paste | StandardShortcut::Cut => {
                             return KeyEventResult::EventIgnored;
                         }
                         _ => (),
-                    },
-                    None => (),
+                    }
                 }
                 if self.read_only() || event.modifiers.control {
                     return KeyEventResult::EventIgnored;
@@ -538,12 +536,6 @@ impl Item for TextInput {
                 KeyEventResult::EventAccepted
             }
             KeyEventType::CommitComposition => {
-                // Winit says that it will always send an event to empty the pre-edit area, but with
-                // korean IME on Windows for example that's not the case. Qt also doesn't make that guarantee,
-                // so clear it by hand here.
-                self.preedit_text.set(Default::default());
-                self.preedit_selection_start.set(0);
-                self.preedit_selection_end.set(0);
                 self.insert(&event.text, window_adapter, self_rc);
                 KeyEventResult::EventAccepted
             }
@@ -562,13 +554,27 @@ impl Item for TextInput {
                 self.has_focus.set(true);
                 self.show_cursor(window_adapter);
                 WindowInner::from_pub(window_adapter.window()).set_text_input_focused(true);
-                window_adapter.enable_input_method(self.input_type());
+                // FIXME: This should be tracked by a PropertyTracker in window and toggled when read_only() toggles.
+                if !self.read_only() {
+                    if let Some(window_adapter) = window_adapter.internal(crate::InternalToken) {
+                        window_adapter.input_method_request(InputMethodRequest::Enable {
+                            input_type: self.input_type(),
+                        });
+                    }
+                }
             }
             FocusEvent::FocusOut | FocusEvent::WindowLostFocus => {
                 self.has_focus.set(false);
                 self.hide_cursor();
                 WindowInner::from_pub(window_adapter.window()).set_text_input_focused(false);
-                window_adapter.disable_input_method();
+                if !self.read_only() {
+                    if let Some(window_adapter) = window_adapter.internal(crate::InternalToken) {
+                        window_adapter.input_method_request(InputMethodRequest::Disable {});
+                        self.preedit_text.set(Default::default());
+                        self.preedit_selection_start.set(0);
+                        self.preedit_selection_end.set(0);
+                    }
+                }
             }
         }
         FocusEventResult::FocusAccepted
@@ -659,7 +665,7 @@ fn safe_byte_offset(unsafe_byte_offset: i32, text: &str) -> usize {
     // Use std::floor_char_boundary once stabilized.
     text.char_indices()
         .find_map(|(offset, _)| if offset >= byte_offset_candidate { Some(offset) } else { None })
-        .unwrap_or_else(|| text.len())
+        .unwrap_or(text.len())
 }
 
 /// This struct holds the fields needed for rendering a TextInput item after applying any
@@ -697,7 +703,7 @@ impl TextInputVisualRepresentation {
 
         let text = &mut self.text;
         let fixup_range = |r: &mut core::ops::Range<usize>| {
-            if !core::ops::Range::is_empty(&r) {
+            if !core::ops::Range::is_empty(r) {
                 r.start = text[..r.start].chars().count() * password_character.len_utf8();
                 r.end = text[..r.end].chars().count() * password_character.len_utf8();
             }
@@ -751,14 +757,13 @@ impl TextInput {
             return false;
         }
 
-        let renderer = window_adapter.renderer();
-
         let last_cursor_pos = self.cursor_position(&text);
 
         let mut grapheme_cursor =
             unicode_segmentation::GraphemeCursor::new(last_cursor_pos, text.len(), true);
 
-        let font_height = renderer
+        let font_height = window_adapter
+            .renderer()
             .text_size(
                 self.font_request(window_adapter),
                 " ",
@@ -779,24 +784,22 @@ impl TextInput {
             TextCursorDirection::NextLine => {
                 reset_preferred_x_pos = false;
 
-                let cursor_rect =
-                    renderer.text_input_cursor_rect_for_byte_offset(self, last_cursor_pos);
+                let cursor_rect = self.cursor_rect_for_byte_offset(last_cursor_pos, window_adapter);
                 let mut cursor_xy_pos = cursor_rect.center();
 
                 cursor_xy_pos.y += font_height;
                 cursor_xy_pos.x = self.preferred_x_pos.get();
-                renderer.text_input_byte_offset_for_position(self, cursor_xy_pos)
+                self.byte_offset_for_position(cursor_xy_pos, window_adapter)
             }
             TextCursorDirection::PreviousLine => {
                 reset_preferred_x_pos = false;
 
-                let cursor_rect =
-                    renderer.text_input_cursor_rect_for_byte_offset(self, last_cursor_pos);
+                let cursor_rect = self.cursor_rect_for_byte_offset(last_cursor_pos, window_adapter);
                 let mut cursor_xy_pos = cursor_rect.center();
 
                 cursor_xy_pos.y -= font_height;
                 cursor_xy_pos.x = self.preferred_x_pos.get();
-                renderer.text_input_byte_offset_for_position(self, cursor_xy_pos)
+                self.byte_offset_for_position(cursor_xy_pos, window_adapter)
             }
             TextCursorDirection::PreviousCharacter => {
                 let mut i = last_cursor_pos;
@@ -813,20 +816,18 @@ impl TextInput {
                 prev_word_boundary(&text, last_cursor_pos.saturating_sub(1))
             }
             TextCursorDirection::StartOfLine => {
-                let cursor_rect =
-                    renderer.text_input_cursor_rect_for_byte_offset(self, last_cursor_pos);
+                let cursor_rect = self.cursor_rect_for_byte_offset(last_cursor_pos, window_adapter);
                 let mut cursor_xy_pos = cursor_rect.center();
 
                 cursor_xy_pos.x = 0 as Coord;
-                renderer.text_input_byte_offset_for_position(self, cursor_xy_pos)
+                self.byte_offset_for_position(cursor_xy_pos, window_adapter)
             }
             TextCursorDirection::EndOfLine => {
-                let cursor_rect =
-                    renderer.text_input_cursor_rect_for_byte_offset(self, last_cursor_pos);
+                let cursor_rect = self.cursor_rect_for_byte_offset(last_cursor_pos, window_adapter);
                 let mut cursor_xy_pos = cursor_rect.center();
 
                 cursor_xy_pos.x = Coord::MAX;
-                renderer.text_input_byte_offset_for_position(self, cursor_xy_pos)
+                self.byte_offset_for_position(cursor_xy_pos, window_adapter)
             }
             TextCursorDirection::StartOfParagraph => {
                 prev_paragraph_boundary(&text, last_cursor_pos.saturating_sub(1))
@@ -867,9 +868,8 @@ impl TextInput {
     ) {
         self.cursor_position_byte_offset.set(new_position);
         if new_position >= 0 {
-            let pos = window_adapter
-                .renderer()
-                .text_input_cursor_rect_for_byte_offset(self, new_position as usize)
+            let pos = self
+                .cursor_rect_for_byte_offset(new_position as usize, window_adapter)
                 .origin
                 .to_untyped();
             if reset_preferred_x_pos {
@@ -885,14 +885,18 @@ impl TextInput {
         window_adapter: &Rc<dyn WindowAdapter>,
         self_rc: &ItemRc,
     ) {
-        let cursor_position = self.cursor_position(&self.text());
-        let cursor_point_relative = window_adapter
-            .renderer()
-            .text_input_cursor_rect_for_byte_offset(self, cursor_position)
-            .to_box2d()
-            .max;
-        let cursor_point_absolute = self_rc.map_to_window(cursor_point_relative);
-        window_adapter.set_ime_position(cursor_point_absolute);
+        if self.read_only() {
+            return;
+        }
+        if let Some(w) = window_adapter.internal(crate::InternalToken) {
+            let cursor_position = self.cursor_position(&self.text());
+            let cursor_point_relative =
+                self.cursor_rect_for_byte_offset(cursor_position, window_adapter).to_box2d().max;
+            let cursor_point_absolute = self_rc.map_to_window(cursor_point_relative);
+            w.input_method_request(InputMethodRequest::SetPosition {
+                position: crate::api::LogicalPosition::from_euclid(cursor_point_absolute),
+            });
+        }
     }
 
     fn select_and_delete(
@@ -907,7 +911,7 @@ impl TextInput {
         self.delete_selection(window_adapter, self_rc);
     }
 
-    fn delete_selection(
+    pub fn delete_selection(
         self: Pin<&Self>,
         window_adapter: &Rc<dyn WindowAdapter>,
         self_rc: &ItemRc,
@@ -956,12 +960,16 @@ impl TextInput {
         anchor_pos != cursor_pos
     }
 
-    fn insert(
+    pub fn insert(
         self: Pin<&Self>,
         text_to_insert: &str,
         window_adapter: &Rc<dyn WindowAdapter>,
         self_rc: &ItemRc,
     ) {
+        self.preedit_text.set(Default::default());
+        self.preedit_selection_start.set(0);
+        self.preedit_selection_end.set(0);
+
         self.delete_selection(window_adapter, self_rc);
         let mut text: String = self.text().into();
         let cursor_pos = self.selection_anchor_and_cursor().1;
@@ -977,7 +985,12 @@ impl TextInput {
         Self::FIELD_OFFSETS.edited.apply_pin(self).call(&());
     }
 
-    fn select_all(self: Pin<&Self>, window_adapter: &Rc<dyn WindowAdapter>, self_rc: &ItemRc) {
+    pub fn cut(self: Pin<&Self>, window_adapter: &Rc<dyn WindowAdapter>, self_rc: &ItemRc) {
+        self.copy(window_adapter, self_rc);
+        self.delete_selection(window_adapter, self_rc);
+    }
+
+    pub fn select_all(self: Pin<&Self>, window_adapter: &Rc<dyn WindowAdapter>, self_rc: &ItemRc) {
         self.move_cursor(
             TextCursorDirection::StartOfText,
             AnchorMode::MoveAnchor,
@@ -990,6 +1003,10 @@ impl TextInput {
             window_adapter,
             self_rc,
         );
+    }
+
+    pub fn clear_selection(self: Pin<&Self>, _: &Rc<dyn WindowAdapter>, _: &ItemRc) {
+        self.as_ref().anchor_position_byte_offset.set(self.as_ref().cursor_position_byte_offset());
     }
 
     fn select_word(self: Pin<&Self>, window_adapter: &Rc<dyn WindowAdapter>, self_rc: &ItemRc) {
@@ -1022,7 +1039,11 @@ impl TextInput {
         self.set_cursor_position(new_c as i32, true, window_adapter, self_rc);
     }
 
-    fn copy(self: Pin<&Self>, clipboard: Clipboard) {
+    pub fn copy(self: Pin<&Self>, _: &Rc<dyn WindowAdapter>, _: &ItemRc) {
+        self.copy_clipboard(Clipboard::DefaultClipboard);
+    }
+
+    fn copy_clipboard(self: Pin<&Self>, clipboard: Clipboard) {
         let (anchor, cursor) = self.selection_anchor_and_cursor();
         if anchor == cursor {
             return;
@@ -1035,7 +1056,11 @@ impl TextInput {
         });
     }
 
-    fn paste(
+    pub fn paste(self: Pin<&Self>, window_adapter: &Rc<dyn WindowAdapter>, self_rc: &ItemRc) {
+        self.paste_clipboard(window_adapter, self_rc, Clipboard::DefaultClipboard);
+    }
+
+    fn paste_clipboard(
         self: Pin<&Self>,
         window_adapter: &Rc<dyn WindowAdapter>,
         self_rc: &ItemRc,
@@ -1077,6 +1102,7 @@ impl TextInput {
                 }
             },
             letter_spacing: Some(self.letter_spacing()),
+            italic: self.font_italic(),
         }
     }
 
@@ -1131,6 +1157,32 @@ impl TextInput {
         repr.apply_password_character_substitution(self, password_character_fn);
         repr
     }
+
+    fn cursor_rect_for_byte_offset(
+        self: Pin<&Self>,
+        byte_offset: usize,
+        window_adapter: &Rc<dyn WindowAdapter>,
+    ) -> LogicalRect {
+        window_adapter.renderer().text_input_cursor_rect_for_byte_offset(
+            self,
+            byte_offset,
+            self.font_request(window_adapter),
+            ScaleFactor::new(window_adapter.window().scale_factor()),
+        )
+    }
+
+    fn byte_offset_for_position(
+        self: Pin<&Self>,
+        pos: LogicalPoint,
+        window_adapter: &Rc<dyn WindowAdapter>,
+    ) -> usize {
+        window_adapter.renderer().text_input_byte_offset_for_position(
+            self,
+            pos,
+            self.font_request(window_adapter),
+            ScaleFactor::new(window_adapter.window().scale_factor()),
+        )
+    }
 }
 
 fn next_paragraph_boundary(text: &str, last_cursor_pos: usize) -> usize {
@@ -1172,4 +1224,69 @@ fn next_word_boundary(text: &str, last_cursor_pos: usize) -> usize {
     text.unicode_word_indices()
         .find(|(offset, slice)| *offset + slice.len() >= last_cursor_pos)
         .map_or(text.len(), |(offset, slice)| offset + slice.len())
+}
+
+#[cfg(feature = "ffi")]
+#[no_mangle]
+pub unsafe extern "C" fn slint_textinput_select_all(
+    text_input: *const TextInput,
+    window_adapter: *const crate::window::ffi::WindowAdapterRcOpaque,
+    self_component: &vtable::VRc<crate::component::ComponentVTable>,
+    self_index: usize,
+) {
+    let window_adapter = &*(window_adapter as *const Rc<dyn WindowAdapter>);
+    let self_rc = ItemRc::new(self_component.clone(), self_index);
+    Pin::new_unchecked(&*text_input).as_ref().select_all(window_adapter, &self_rc);
+}
+
+#[cfg(feature = "ffi")]
+#[no_mangle]
+pub unsafe extern "C" fn slint_textinput_clear_selection(
+    text_input: *const TextInput,
+    window_adapter: *const crate::window::ffi::WindowAdapterRcOpaque,
+    self_component: &vtable::VRc<crate::component::ComponentVTable>,
+    self_index: usize,
+) {
+    let window_adapter = &*(window_adapter as *const Rc<dyn WindowAdapter>);
+    let self_rc = ItemRc::new(self_component.clone(), self_index);
+    Pin::new_unchecked(&*text_input).as_ref().clear_selection(window_adapter, &self_rc);
+}
+
+#[cfg(feature = "ffi")]
+#[no_mangle]
+pub unsafe extern "C" fn slint_textinput_cut(
+    text_input: *const TextInput,
+    window_adapter: *const crate::window::ffi::WindowAdapterRcOpaque,
+    self_component: &vtable::VRc<crate::component::ComponentVTable>,
+    self_index: usize,
+) {
+    let window_adapter = &*(window_adapter as *const Rc<dyn WindowAdapter>);
+    let self_rc = ItemRc::new(self_component.clone(), self_index);
+    Pin::new_unchecked(&*text_input).as_ref().cut(window_adapter, &self_rc);
+}
+
+#[cfg(feature = "ffi")]
+#[no_mangle]
+pub unsafe extern "C" fn slint_textinput_copy(
+    text_input: *const TextInput,
+    window_adapter: *const crate::window::ffi::WindowAdapterRcOpaque,
+    self_component: &vtable::VRc<crate::component::ComponentVTable>,
+    self_index: usize,
+) {
+    let window_adapter = &*(window_adapter as *const Rc<dyn WindowAdapter>);
+    let self_rc = ItemRc::new(self_component.clone(), self_index);
+    Pin::new_unchecked(&*text_input).as_ref().copy(window_adapter, &self_rc);
+}
+
+#[cfg(feature = "ffi")]
+#[no_mangle]
+pub unsafe extern "C" fn slint_textinput_paste(
+    text_input: *const TextInput,
+    window_adapter: *const crate::window::ffi::WindowAdapterRcOpaque,
+    self_component: &vtable::VRc<crate::component::ComponentVTable>,
+    self_index: usize,
+) {
+    let window_adapter = &*(window_adapter as *const Rc<dyn WindowAdapter>);
+    let self_rc = ItemRc::new(self_component.clone(), self_index);
+    Pin::new_unchecked(&*text_input).as_ref().paste(window_adapter, &self_rc);
 }

@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 //! Module containing the private api that is used by the generated code.
 //!
@@ -138,10 +138,34 @@ pub fn debug(s: SharedString) {
     }
 }
 
+pub fn ensure_backend() -> Result<(), crate::PlatformError> {
+    i_slint_backend_selector::with_platform(|_b| {
+        // Nothing to do, just make sure a backend was created
+        Ok(())
+    })
+}
+
 /// Creates a new window to render components in.
 pub fn create_window_adapter(
 ) -> Result<alloc::rc::Rc<dyn i_slint_core::window::WindowAdapter>, crate::PlatformError> {
     i_slint_backend_selector::with_platform(|b| b.create_window_adapter())
+}
+
+/// Wrapper around i_slint_core::translations::translate for the generated code
+pub fn translate(
+    origin: SharedString,
+    context: SharedString,
+    domain: SharedString,
+    args: Slice<SharedString>,
+    n: i32,
+    plural: SharedString,
+) -> SharedString {
+    i_slint_core::translations::translate(&origin, &context, &domain, args.as_slice(), n, &plural)
+}
+
+#[cfg(feature = "gettext")]
+pub fn init_translations(domain: &str, dirname: impl Into<std::path::PathBuf>) {
+    i_slint_core::translations::gettext_bindtextdomain(domain, dirname.into()).unwrap()
 }
 
 /// internal re_exports used by the macro generated
@@ -172,11 +196,13 @@ pub mod re_exports {
     };
     pub use i_slint_core::items::*;
     pub use i_slint_core::layout::*;
-    pub use i_slint_core::lengths::LogicalLength;
+    pub use i_slint_core::lengths::{logical_position_to_api, LogicalLength, LogicalPoint};
     pub use i_slint_core::model::*;
     pub use i_slint_core::properties::{set_state_binding, Property, PropertyTracker, StateInfo};
     pub use i_slint_core::slice::Slice;
-    pub use i_slint_core::window::{WindowAdapter, WindowInner};
+    pub use i_slint_core::window::{
+        InputMethodRequest, WindowAdapter, WindowAdapterRc, WindowInner,
+    };
     pub use i_slint_core::Color;
     pub use i_slint_core::ComponentVTable_static;
     pub use i_slint_core::Coord;

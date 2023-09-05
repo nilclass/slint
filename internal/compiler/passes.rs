@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 mod apply_default_properties_from_style;
 mod binding_analysis;
@@ -10,7 +10,7 @@ mod clip;
 mod collect_custom_fonts;
 mod collect_globals;
 mod collect_init_code;
-mod collect_structs;
+mod collect_structs_and_enums;
 mod collect_subcomponents;
 mod compile_paths;
 mod const_propagation;
@@ -25,7 +25,9 @@ mod focus_item;
 pub mod generate_item_indices;
 pub mod infer_aliases_types;
 mod inlining;
+mod lower_absolute_coordinates;
 mod lower_accessibility;
+mod lower_component_container;
 mod lower_layout;
 mod lower_popups;
 mod lower_property_to_element;
@@ -83,7 +85,12 @@ pub async fn run_passes(
     for component in (root_component.used_types.borrow().sub_components.iter())
         .chain(std::iter::once(root_component))
     {
-        compile_paths::compile_paths(component, &doc.local_registry, diag);
+        compile_paths::compile_paths(
+            component,
+            &doc.local_registry,
+            compiler_config.embed_resources,
+            diag,
+        );
         lower_tabwidget::lower_tabwidget(component, type_loader, diag).await;
         apply_default_properties_from_style::apply_default_properties_from_style(
             component,
@@ -115,8 +122,11 @@ pub async fn run_passes(
         flickable::handle_flickable(component, &global_type_registry.borrow());
         repeater_component::process_repeater_components(component);
         lower_popups::lower_popups(component, &doc.local_registry, diag);
+        lower_component_container::lower_component_container(component, &doc.local_registry, diag);
+
         lower_layout::lower_layouts(component, type_loader, diag).await;
         default_geometry::default_geometry(component, diag);
+        lower_absolute_coordinates::lower_absolute_coordinates(component);
         z_order::reorder_by_z_order(component, diag);
         lower_property_to_element::lower_property_to_element(
             component,
@@ -200,7 +210,7 @@ pub async fn run_passes(
         remove_unused_properties::remove_unused_properties(component);
     }
 
-    collect_structs::collect_structs(doc);
+    collect_structs_and_enums::collect_structs_and_enums(doc);
 
     for component in (root_component.used_types.borrow().sub_components.iter())
         .chain(std::iter::once(root_component))
@@ -241,7 +251,7 @@ pub async fn run_passes(
                 compiler_config.scale_factor,
                 font_pixel_sizes,
                 characters_seen,
-                std::iter::once(&*doc).chain(type_loader.all_documents()),
+                std::iter::once(doc).chain(type_loader.all_documents()),
                 diag,
             );
         }
@@ -249,7 +259,7 @@ pub async fn run_passes(
             // Create font registration calls for custom fonts, unless we're embedding pre-rendered glyphs
             collect_custom_fonts::collect_custom_fonts(
                 root_component,
-                std::iter::once(&*doc).chain(type_loader.all_documents()),
+                std::iter::once(doc).chain(type_loader.all_documents()),
                 compiler_config.embed_resources == crate::EmbedResourcesKind::EmbedAllResources,
             );
         }

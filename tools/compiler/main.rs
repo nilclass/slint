@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 use clap::{Parser, ValueEnum};
 use i_slint_compiler::diagnostics::BuildDiagnostics;
@@ -17,6 +17,7 @@ enum Embedding {
     /// Embed in a format optimized for the software renderer. This
     /// option falls back to `embed-files` if the software-renderer is not
     /// used
+    #[cfg(feature = "software-renderer")]
     EmbedForSoftwareRenderer,
 }
 
@@ -50,6 +51,10 @@ struct Cli {
     /// Sets the output file ('-' for stdout)
     #[arg(name = "file to generate", short = 'o', default_value = "-", action)]
     output: std::path::PathBuf,
+
+    /// Translation domain
+    #[arg(long = "translation-domain", action)]
+    translation_domain: Option<String>,
 }
 
 fn main() -> std::io::Result<()> {
@@ -63,6 +68,7 @@ fn main() -> std::io::Result<()> {
         std::process::exit(-1);
     }
     let mut compiler_config = CompilerConfiguration::new(args.format);
+    compiler_config.translation_domain = args.translation_domain;
 
     // Override defaults from command line:
     if let Some(embed) = args.embed_resources {
@@ -71,8 +77,6 @@ fn main() -> std::io::Result<()> {
             Embedding::EmbedFiles => EmbedResourcesKind::EmbedAllResources,
             #[cfg(feature = "software-renderer")]
             Embedding::EmbedForSoftwareRenderer => EmbedResourcesKind::EmbedTextures,
-            #[cfg(not(feature = "software-renderer"))]
-            Embedding::EmbedForSoftwareRenderer => EmbedResourcesKind::EmbedAllResources,
         };
     }
 
@@ -93,7 +97,7 @@ fn main() -> std::io::Result<()> {
 
     if let Some(depfile) = args.depfile {
         let mut f = std::fs::File::create(depfile)?;
-        write!(f, "{}:", args.output.display())?;
+        write!(f, "{}: {}", args.output.display(), args.path.display())?;
         for x in &diag.all_loaded_files {
             if x.is_absolute() {
                 write!(f, " {}", x.display())?;

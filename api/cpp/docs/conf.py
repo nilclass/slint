@@ -1,4 +1,4 @@
-# Copyright © SixtyFPS GmbH <info@slint-ui.com>
+# Copyright © SixtyFPS GmbH <info@slint.dev>
 # SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
 
 # Configuration file for the Sphinx documentation builder.
@@ -21,12 +21,12 @@ import textwrap
 
 # -- Project information -----------------------------------------------------
 
-project = "Slint C++ API"
-copyright = "SixtyFPS GmbH"
-author = "Slint Developers <info@slint-ui.com>"
-
 # The full version, including alpha/beta/rc tags
-version = "1.0.3"
+version = "1.2.0"
+
+project = f'Slint {version} C++ API'
+copyright = "SixtyFPS GmbH"
+author = "Slint Developers <info@slint.dev>"
 
 cpp_index_common_prefix = ["slint::", "slint::interpreter::"]
 
@@ -53,7 +53,7 @@ exhale_args = {
             If you choose to load :code:`.slint` files dynamically at run-time, then
             you can use the classes in :ref:`slint::interpreter<namespace_slint__interpreter>`, starting at
             :cpp:class:`slint::interpreter::ComponentCompiler`. You need to include
-            the :code:`slint_interpreter.h` header file.
+            the :code:`slint-interpreter.h` header file.
         """
     ),
     "doxygenStripFromPath": "..",
@@ -65,6 +65,7 @@ EXCLUDE_SYMBOLS = slint::cbindgen_private* slint::private_api* vtable* slint::te
 EXCLUDE = ../../api/cpp/include/vtable.h ../../api/cpp/include/slint_testing.h
 ENABLE_PREPROCESSING = YES
 PREDEFINED += DOXYGEN
+INCLUDE_PATH = generated_include
 WARN_AS_ERROR = YES""",
 }
 
@@ -104,7 +105,7 @@ html_static_path = ["_static"]
 
 html_show_sourcelink = False
 
-html_logo = "https://slint-ui.com/logo/slint-logo-small-light.svg"
+html_logo = "https://slint.dev/logo/slint-logo-small-light.svg"
 
 myst_enable_extensions = [
     "html_image",
@@ -113,11 +114,16 @@ myst_enable_extensions = [
 # Annotate h1/h2 elements with anchors
 myst_heading_anchors = 2
 
+myst_url_schemes = {
+    "slint-reference": f"https://slint.dev/releases/{version}/docs/slint/{{{{path}}}}",
+    'http': None, 'https': None, 'mailto': None,
+}
+
 rst_epilog = """
 .. |ListView| replace:: :code:`ListView`
-.. _ListView: ../slint/src/builtins/widgets.html#listview
+.. _ListView: ../../slint/src/builtins/widgets.html#listview
 .. |Repetition| replace:: :code:`for` - :code:`in`
-.. _Repetition: ../slint/src/reference/repetitions.html
+.. _Repetition: ../../slint/src/reference/repetitions.html
 """
 
 

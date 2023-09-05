@@ -1,11 +1,12 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 #pragma once
 #include "slint_sharedvector_internal.h"
 #include <atomic>
 #include <algorithm>
 #include <initializer_list>
+#include <memory>
 
 namespace slint {
 
@@ -60,9 +61,8 @@ struct SharedVector
     SharedVector(InputIt first, InputIt last)
         : SharedVector(SharedVector::with_capacity(std::distance(first, last)))
     {
-        for (auto it = first; it != last; ++it) {
-            push_back(*it);
-        }
+        std::uninitialized_copy(first, last, begin());
+        inner->size = inner->capacity;
     }
 
     /// Creates a new vector that is a copy of \a other.

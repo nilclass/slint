@@ -1,0 +1,124 @@
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+
+
+import { Palette, Typography, Elevation, Icons } from "styling.slint";
+import { ListItem } from "components.slint";
+
+export component ComboBox {
+    callback selected(string /* current-value */);
+
+    in property enabled <=> i-focus-scope.enabled;
+    in property <[string]> model;
+    out property <bool> has-focus <=> i-focus-scope.has-focus;
+    in-out property <int> current-index : 0;
+    in-out property <string> current-value: root.model[root.current-index];
+
+    horizontal-stretch: 1;
+    vertical-stretch: 0;
+    min-width: max(160px, i-layout.min-width);
+    min-height: max(56px, i-layout.min-height);
+    accessible-role: combobox;
+    accessible-value <=> root.current-value;
+    forward-focus: i-focus-scope;
+
+    i-focus-scope := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.UpArrow) {
+                root.current-index = Math.max(root.current-index - 1, 0);
+                root.current-value = root.model[root.current-index];
+                return accept;
+            } else if (event.text == Key.DownArrow) {
+                root.current-index = Math.min(root.current-index + 1, root.model.length - 1);
+                root.current-value = root.model[root.current-index];
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    i-background := Rectangle {
+        width: 100%;
+        height: 100%;
+        border-radius: 4px;
+        border-width: 1px;
+        border-color: Palette.outline;
+    }
+
+    i-layout := HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 12px;
+        spacing: 16px;
+
+        i-label := Text {
+            text <=> root.current-value;
+            color: Palette.on-surface;
+            vertical-alignment: center;
+            // FIXME after Roboto font can be loaded
+            // font-family: Typography.body-large.font;
+            font-size: Typography.body-large.font-size;
+            font-weight: Typography.body-large.font-weight;
+        }
+
+        i-icon := Image {
+            width: 24px;
+            height: 24px;
+            y: (parent.height - self.height) / 2;
+            source: Icons.expand-more;
+            colorize: Palette.on-surface;
+        }
+    }
+
+    i-touch-area := TouchArea {
+        enabled <=> root.enabled;
+
+        clicked => {
+            root.focus();
+            i-popup.show();
+        }
+    }
+
+    i-popup := PopupWindow {
+        x: 0;
+        y: root.height;
+        width: root.width;
+
+        i-popup-container := Rectangle {
+            background: Palette.surface;
+            drop-shadow-color: Palette.shadow;
+            drop-shadow-blur: Elevation.level2;
+            drop-shadow-offset-y: 1px;
+            border-radius: 4px;
+        }
+
+        VerticalLayout {
+            for value[idx] in root.model: ListItem {
+                text: value;
+                selected: idx == root.current-index;
+
+                clicked => {
+                    if (root.enabled) {
+                        root.current-index = idx;
+                        root.current-value = value;
+                        root.selected(root.current-value);
+                    }
+                }
+            }
+        }
+    }
+
+    states [
+        disabled when !root.enabled : {
+            i-background.border-color: Palette.on-surface;
+            i-background.opacity: 0.38;
+            i-label.opacity: 0.38;
+            i-icon.opacity: 0.38;
+        }
+        focused when root.has-focus : {
+            i-background.border-width: 2px;
+            i-background.border-color: Palette.primary;
+            i-label.color: Palette.primary;
+            i-icon.colorize: Palette.primary;
+        }
+    ]
+}

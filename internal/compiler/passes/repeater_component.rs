@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 /*!
 Make sure that the Repeated expression are just components without any children
@@ -35,6 +35,7 @@ fn create_repeater_components(component: &Rc<Component>) {
                 property_declarations: std::mem::take(&mut elem.property_declarations),
                 named_references: Default::default(),
                 repeated: None,
+                is_component_placeholder: false,
                 node: elem.node.clone(),
                 enclosing_component: Default::default(),
                 states: std::mem::take(&mut elem.states),

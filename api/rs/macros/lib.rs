@@ -1,10 +1,10 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 // cSpell:ignore punct
 
 #![doc = include_str!("README.md")]
-#![doc(html_logo_url = "https://slint-ui.com/logo/slint-logo-square-light.svg")]
+#![doc(html_logo_url = "https://slint.dev/logo/slint-logo-square-light.svg")]
 
 extern crate proc_macro;
 use std::path::Path;
@@ -171,23 +171,24 @@ fn fill_token_vec(stream: impl Iterator<Item = TokenTree>, vec: &mut Vec<parser:
                     }
                     '|' => {
                         // Since the '|' alone does not exist or cannot be part of any other token that ||
-                        // just consider it as '||' and skip the joint ones.  FIXME. do that properly
+                        // just consider it as '||' and skip the joint ones.
                         if let Some(last) = vec.last_mut() {
-                            if last.kind == SyntaxKind::OrOr && prev_spacing == Spacing::Joint {
+                            if last.kind == SyntaxKind::Pipe && prev_spacing == Spacing::Joint {
+                                last.kind = SyntaxKind::OrOr;
                                 continue;
                             }
                         }
-                        SyntaxKind::OrOr
+                        SyntaxKind::Pipe
                     }
                     '%' => {
-                        // % can only exist after number literal
+                        // handle % as a unit
                         if let Some(last) = vec.last_mut() {
                             if last.kind == SyntaxKind::NumberLiteral {
                                 last.text = format!("{}%", last.text).into();
                                 continue;
                             }
                         }
-                        SyntaxKind::Error
+                        SyntaxKind::Percent
                     }
                     '$' => SyntaxKind::Dollar,
                     '@' => SyntaxKind::At,
@@ -207,7 +208,7 @@ fn fill_token_vec(stream: impl Iterator<Item = TokenTree>, vec: &mut Vec<parser:
                 let f = s.chars().next().unwrap();
                 let kind = if f == '"' {
                     SyntaxKind::StringLiteral
-                } else if f.is_digit(10) {
+                } else if f.is_ascii_digit() {
                     if let Some(last) = vec.last_mut() {
                         if (last.kind == SyntaxKind::ColorLiteral && last.text.len() == 1)
                             || (last.kind == SyntaxKind::Identifier
@@ -302,7 +303,7 @@ fn extract_include_paths(
 /// you can use place Slint code and the named exported components will be available for instantiation.
 ///
 /// For the documentation about the syntax of the language, see
-#[doc = concat!("[The Slint Language Documentation](https://slint-ui.com/releases/", env!("CARGO_PKG_VERSION"), "/docs/slint)")]
+#[doc = concat!("[The Slint Language Documentation](https://slint.dev/releases/", env!("CARGO_PKG_VERSION"), "/docs/slint)")]
 ///
 /// When `import`ing `.slint` files or loading images with `@image-url`, the specified paths are relative to the
 /// the directory that contains Cargo.toml.
@@ -336,6 +337,7 @@ pub fn slint(stream: TokenStream) -> TokenStream {
     //println!("{:#?}", syntax_node);
     let mut compiler_config =
         CompilerConfiguration::new(i_slint_compiler::generator::OutputFormat::Rust);
+    compiler_config.translation_domain = std::env::var("CARGO_PKG_NAME").ok();
 
     if std::env::var_os("SLINT_STYLE").is_none() {
         // This file is written by the i-slint-backend-selector's built script.

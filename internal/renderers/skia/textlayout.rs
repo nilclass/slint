@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -77,7 +77,11 @@ pub fn create_layout(
     text_style.set_font_style(skia_safe::FontStyle::new(
         font_request.weight.map_or(skia_safe::font_style::Weight::NORMAL, |w| w.into()),
         skia_safe::font_style::Width::NORMAL,
-        skia_safe::font_style::Slant::Upright,
+        if font_request.italic {
+            skia_safe::font_style::Slant::Italic
+        } else {
+            skia_safe::font_style::Slant::Upright
+        },
     ));
 
     let mut style = skia_safe::textlayout::ParagraphStyle::new();
@@ -107,18 +111,20 @@ pub fn create_layout(
         if let Some(selection_background) = selection.background {
             let mut selection_background_paint = skia_safe::Paint::default();
             selection_background_paint.set_color(to_skia_color(&selection_background));
-            selection_style.set_background_color(&selection_background_paint);
+            selection_style.set_background_paint(&selection_background_paint);
         }
 
         if let Some(selection_foreground) = selection.foreground {
             let mut selection_foreground_paint = skia_safe::Paint::default();
             selection_foreground_paint.set_color(to_skia_color(&selection_foreground));
-            selection_style.set_foreground_color(&selection_foreground_paint);
+            selection_style.set_foreground_paint(&selection_foreground_paint);
         }
 
         if selection.underline {
-            selection_style.decoration_mut().ty = skia_safe::textlayout::TextDecoration::UNDERLINE;
-            selection_style.decoration_mut().color = text_style.foreground().color();
+            let mut decoration = skia_safe::textlayout::Decoration::default();
+            decoration.ty = skia_safe::textlayout::TextDecoration::UNDERLINE;
+            decoration.color = text_style.foreground().color();
+            selection_style.set_decoration(&decoration);
         }
 
         builder.push_style(&selection_style);

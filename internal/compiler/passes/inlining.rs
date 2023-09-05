@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 //! Inline each object_tree::Component within the main Component
 
@@ -235,6 +235,7 @@ fn duplicate_element_with_mapping(
             .map(|x| duplicate_element_with_mapping(x, mapping, root_component, priority_delta))
             .collect(),
         repeated: elem.repeated.clone(),
+        is_component_placeholder: elem.is_component_placeholder,
         node: elem.node.clone(),
         enclosing_component: Rc::downgrade(root_component),
         states: elem.states.clone(),
@@ -344,6 +345,7 @@ fn duplicate_popup(
     PopupWindow {
         x: p.x.clone(),
         y: p.y.clone(),
+        close_on_click: p.close_on_click,
         component: duplicate_sub_component(&p.component, &parent, mapping, priority_delta),
         parent_element: mapping
             .get(&element_key(p.parent_element.clone()))

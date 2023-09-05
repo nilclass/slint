@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 // cSpell: ignore lumino permalink
 
@@ -96,6 +96,9 @@ function create_style_menu(editor: EditorWidget): Menu {
         { label: "Material", name: "material" },
         { label: "Material Light", name: "material-light" },
         { label: "Material Dark", name: "material-dark" },
+        { label: "Cupertino (Experimental)", name: "cupertino" },
+        { label: "Cupertino Light (Experimental)", name: "cupertino-light" },
+        { label: "Cupertino Dark (Experimental)", name: "cupertino-dark" },
     ]) {
         const command_name = "slint:set_style_" + style.name;
         commands.addCommand(command_name, {

@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 //! Passe that compute the layout constraint
 
@@ -732,27 +732,6 @@ fn eval_const_expr(
         _ => {
             diag.push_error(format!("'{}' must be an integer literal", name), span);
             None
-        }
-    }
-}
-
-/// Create a new property based on the name. (it might get a different name if that property exist)
-pub fn create_new_prop(elem: &ElementRc, tentative_name: &str, ty: Type) -> NamedReference {
-    let mut e = elem.borrow_mut();
-    if !e.lookup_property(tentative_name).is_valid() {
-        e.property_declarations.insert(tentative_name.into(), ty.into());
-        drop(e);
-        NamedReference::new(elem, tentative_name)
-    } else {
-        let mut counter = 0;
-        loop {
-            counter += 1;
-            let name = format!("{}{}", tentative_name, counter);
-            if !e.lookup_property(&name).is_valid() {
-                e.property_declarations.insert(name.clone(), ty.into());
-                drop(e);
-                return NamedReference::new(elem, &name);
-            }
         }
     }
 }

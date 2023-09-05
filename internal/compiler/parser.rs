@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 /*! The Slint Language Parser
 
@@ -319,10 +319,12 @@ declare_syntax! {
         Question -> "?",
         Dollar -> "$",
         At -> "@",
+        Pipe -> "|",
+        Percent -> "%",
     }
     // syntax kind
     {
-        Document -> [ *Component, *ExportsList, *ImportSpecifier, *StructDeclaration ],
+        Document -> [ *Component, *ExportsList, *ImportSpecifier, *StructDeclaration, *EnumDeclaration ],
         /// `DeclaredIdentifier := Element { ... }`
         Component -> [ DeclaredIdentifier, Element ],
         /// `id := Element { ... }`
@@ -359,7 +361,7 @@ declare_syntax! {
         // FIXME: the test should test that as alternative rather than several of them (but it can also be a literal)
         Expression-> [ ?Expression, ?FunctionCallExpression, ?IndexExpression, ?SelfAssignment,
                        ?ConditionalExpression, ?QualifiedName, ?BinaryExpression, ?Array, ?ObjectLiteral,
-                       ?UnaryOpExpression, ?CodeBlock, ?StringTemplate, ?AtImageUrl, ?AtGradient,
+                       ?UnaryOpExpression, ?CodeBlock, ?StringTemplate, ?AtImageUrl, ?AtGradient, ?AtTr,
                        ?MemberAccess ],
         /// Concatenate the Expressions to make a string (usually expended from a template string)
         StringTemplate -> [*Expression],
@@ -367,6 +369,12 @@ declare_syntax! {
         AtImageUrl -> [],
         /// `@linear-gradient(...)` or `@radial-gradient(...)`
         AtGradient -> [*Expression],
+        /// `@tr("foo", ...)`  // the string is a StringLiteral
+        AtTr -> [?TrContext, ?TrPlural, *Expression],
+        /// `"foo" =>`  in a `AtTr` node
+        TrContext -> [],
+        /// `| "foo" % n`  in a `AtTr` node
+        TrPlural -> [Expression],
         /// expression()
         FunctionCallExpression -> [*Expression],
         /// `expression[index]`
@@ -398,7 +406,7 @@ declare_syntax! {
         /// There is an identifier "in" or "out", the DeclaredIdentifier is the state name
         Transition -> [?DeclaredIdentifier, *PropertyAnimation],
         /// Export a set of declared components by name
-        ExportsList -> [ *ExportSpecifier, ?Component, *StructDeclaration, *ExportModule ],
+        ExportsList -> [ *ExportSpecifier, ?Component, *StructDeclaration, *ExportModule, *EnumDeclaration ],
         /// Declare the first identifier to be exported, either under its name or instead
         /// under the name of the second identifier.
         ExportSpecifier -> [ ExportIdentifier, ?ExportName ],
@@ -421,9 +429,14 @@ declare_syntax! {
         ObjectTypeMember -> [ Type ],
         /// `[ type ]`
         ArrayType -> [ Type ],
-        /// `struct Foo := { ... }
-        StructDeclaration -> [DeclaredIdentifier, ObjectType],
-
+        /// `struct Foo { ... }`
+        StructDeclaration -> [DeclaredIdentifier, ObjectType, ?AtRustAttr],
+        /// `enum Foo { bli, bla, blu }`
+        EnumDeclaration -> [DeclaredIdentifier, *EnumValue, ?AtRustAttr],
+        /// The value is a Identifier
+        EnumValue -> [],
+        /// `@rust-attr(...)`
+        AtRustAttr -> [],
     }
 }
 
@@ -484,8 +497,12 @@ mod parser_trait {
         #[must_use = "use start_node_at to use this checkpoint"]
         fn checkpoint(&mut self) -> Self::Checkpoint;
         #[must_use = "The node will be finished when it is dropped"]
-        fn start_node_at(&mut self, checkpoint: Self::Checkpoint, kind: SyntaxKind) -> Node<Self> {
-            self.start_node_impl(kind, Some(checkpoint), NodeToken(()));
+        fn start_node_at(
+            &mut self,
+            checkpoint: impl Into<Option<Self::Checkpoint>>,
+            kind: SyntaxKind,
+        ) -> Node<Self> {
+            self.start_node_impl(kind, checkpoint.into(), NodeToken(()));
             Node(self)
         }
 

@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -170,9 +170,9 @@ impl TypeLoader {
                         match &import.import_kind {
                             ImportKind::ImportList(imported_types) => {
                                 let mut imported_types =
-                                    ImportedName::extract_imported_names(&imported_types).peekable();
+                                    ImportedName::extract_imported_names(imported_types).peekable();
                                 if imported_types.peek().is_some() {
-                                    Self::register_imported_types(doc, &import, imported_types, registry_to_populate, &mut state.diag);
+                                    Self::register_imported_types(doc, &import, imported_types, registry_to_populate, state.diag);
                                 } else {
                                     state.diag.push_error("Import names are missing. Please specify which types you would like to import".into(), &import.import_uri_token.parent());
                                 }
@@ -190,23 +190,17 @@ impl TypeLoader {
                                             compo_or_type.clone(),
                                         )
                                     }),
-                                    &mut state.diag,
+                                    state.diag,
                                 );
                                 Some((exports, export_module_syntax_node.clone()))
                             }
                         }
                     }))
                 } else {
-                    import.file = state
-                        .borrow()
-                        .tl
-                        .resolve_import_path(
-                            Some(&import.import_uri_token.clone().into()),
-                            &import.file,
-                        )
-                        .0
-                        .to_string_lossy()
-                        .to_string();
+                    if let Some((path, _)) = state.borrow().tl.resolve_import_path(Some(&import.import_uri_token.clone().into()), &import.file) {
+                        import.file = path.to_string_lossy().to_string();
+                    };
+
                     foreign_imports.push(import);
                     None
                 }
@@ -217,7 +211,9 @@ impl TypeLoader {
             let mut reexports = None;
             std::future::poll_fn(|cx| {
                 dependencies.retain_mut(|fut| {
-                    let core::task::Poll::Ready(export) = fut.as_mut().poll(cx) else { return true };
+                    let core::task::Poll::Ready(export) = fut.as_mut().poll(cx) else {
+                        return true;
+                    };
                     let Some((exports, node)) = export else { return false };
                     if reexports.is_none() {
                         reexports = Some(exports);
@@ -266,34 +262,31 @@ impl TypeLoader {
         &self,
         import_token: Option<&NodeOrToken>,
         maybe_relative_path_or_url: &str,
-    ) -> (PathBuf, Option<&'static [u8]>) {
+    ) -> Option<(PathBuf, Option<&'static [u8]>)> {
         let referencing_file_or_url =
             import_token.and_then(|tok| tok.source_file().map(|s| s.path()));
 
-        self.find_file_in_include_path(referencing_file_or_url, maybe_relative_path_or_url)
-            .unwrap_or_else(|| {
-                (
-                    referencing_file_or_url
-                        .and_then(|base_path_or_url| {
-                            let base_path_or_url_str = base_path_or_url.to_string_lossy();
-                            if base_path_or_url_str.contains("://") {
-                                url::Url::parse(&base_path_or_url_str).ok().and_then(|base_url| {
-                                    base_url
-                                        .join(maybe_relative_path_or_url)
-                                        .ok()
-                                        .map(|url| url.to_string().into())
-                                })
-                            } else {
-                                base_path_or_url.parent().and_then(|base_dir| {
-                                    dunce::canonicalize(base_dir.join(maybe_relative_path_or_url))
-                                        .ok()
-                                })
-                            }
-                        })
-                        .unwrap_or_else(|| maybe_relative_path_or_url.into()),
-                    None,
-                )
-            })
+        self.find_file_in_include_path(referencing_file_or_url, maybe_relative_path_or_url).or_else(
+            || {
+                referencing_file_or_url
+                    .and_then(|base_path_or_url| {
+                        let base_path_or_url_str = base_path_or_url.to_string_lossy();
+                        if base_path_or_url_str.contains("://") {
+                            url::Url::parse(&base_path_or_url_str).ok().and_then(|base_url| {
+                                base_url
+                                    .join(maybe_relative_path_or_url)
+                                    .ok()
+                                    .map(|url| url.to_string().into())
+                            })
+                        } else {
+                            base_path_or_url.parent().and_then(|base_dir| {
+                                dunce::canonicalize(base_dir.join(maybe_relative_path_or_url)).ok()
+                            })
+                        }
+                    })
+                    .map(|p| (p, None))
+            },
+        )
     }
 
     async fn ensure_document_loaded<'a: 'b, 'b>(
@@ -302,16 +295,69 @@ impl TypeLoader {
         import_token: Option<NodeOrToken>,
         mut import_stack: HashSet<PathBuf>,
     ) -> Option<PathBuf> {
-        let (path_canon, builtin) =
-            { state.borrow().tl.resolve_import_path(import_token.as_ref(), file_to_import) };
+        let mut borrowed_state = state.borrow_mut();
+
+        let (path_canon, builtin) = match borrowed_state
+            .tl
+            .resolve_import_path(import_token.as_ref(), file_to_import)
+        {
+            Some(x) => x,
+            None => match dunce::canonicalize(file_to_import) {
+                Ok(path) => {
+                    if import_token.as_ref().and_then(|x| x.source_file()).is_some() {
+                        borrowed_state.diag.push_warning(
+                        format!(
+                            "Loading \"{file_to_import}\" relative to the work directory is deprecated. Files should be imported relative to their import location",
+                        ),
+                        &import_token,
+                    );
+                    }
+                    (path, None)
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    // We will load using the `open_import_fallback`
+                    // Simplify the path to remove the ".."
+                    let mut path = import_token
+                        .as_ref()
+                        .and_then(|tok| tok.source_file().map(|s| s.path()))
+                        .and_then(|p| p.parent())
+                        .map_or(PathBuf::new(), |p| p.into());
+                    for c in Path::new(file_to_import).components() {
+                        use std::path::Component::*;
+                        match c {
+                            RootDir => path = PathBuf::new(),
+                            CurDir => {}
+                            ParentDir
+                                if matches!(
+                                    path.components().last(),
+                                    Some(Normal(_) | RootDir)
+                                ) =>
+                            {
+                                path.pop();
+                            }
+                            Prefix(_) | ParentDir | Normal(_) => path.push(c),
+                        }
+                    }
+                    (path, None)
+                }
+                Err(err) => {
+                    borrowed_state.diag.push_error(
+                        format!("Error reading requested import \"{file_to_import}\": {err}",),
+                        &import_token,
+                    );
+                    return None;
+                }
+            },
+        };
 
         if !import_stack.insert(path_canon.clone()) {
-            state.borrow_mut().diag.push_error(
+            borrowed_state.diag.push_error(
                 format!("Recursive import of \"{}\"", path_canon.display()),
                 &import_token,
             );
             return None;
         }
+        drop(borrowed_state);
 
         let is_loaded = core::future::poll_fn(|cx| {
             let mut state = state.borrow_mut();
@@ -354,16 +400,26 @@ impl TypeLoader {
             std::fs::read_to_string(&path_canon)
         };
 
-        let source_code = match source_code_result {
-            Ok(source) => source,
+        let ok = match source_code_result {
+            Ok(source) => {
+                Self::load_file_impl(
+                    state,
+                    &path_canon,
+                    &path_canon,
+                    source,
+                    builtin.is_some(),
+                    &import_stack,
+                )
+                .await;
+                true
+            }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                 state.borrow_mut().diag.push_error(
-                    format!(
-                        "Cannot find requested import \"{}\" in the include search path",
-                        file_to_import
-                    ),
-                    &import_token,
-                );
+                        format!(
+                            "Cannot find requested import \"{file_to_import}\" in the include search path",
+                        ),
+                        &import_token,
+                    );
                 return None;
             }
             Err(err) => {
@@ -371,19 +427,9 @@ impl TypeLoader {
                     format!("Error reading requested import \"{}\": {}", path_canon.display(), err),
                     &import_token,
                 );
-                return None;
+                false
             }
         };
-
-        Self::load_file_impl(
-            state,
-            &path_canon,
-            &path_canon,
-            source_code,
-            builtin.is_some(),
-            &import_stack,
-        )
-        .await;
 
         let wakers = state
             .borrow_mut()
@@ -396,7 +442,7 @@ impl TypeLoader {
             x.wake();
         }
 
-        Some(path_canon)
+        ok.then_some(path_canon)
     }
 
     /// Load a file, and its dependency not run the passes.
@@ -431,8 +477,7 @@ impl TypeLoader {
         import_stack: &HashSet<PathBuf>,
     ) {
         let dependency_doc: syntax_nodes::Document =
-            crate::parser::parse(source_code, Some(source_path), &mut state.borrow_mut().diag)
-                .into();
+            crate::parser::parse(source_code, Some(source_path), state.borrow_mut().diag).into();
 
         let dependency_registry =
             Rc::new(RefCell::new(TypeRegister::new(&state.borrow().tl.global_type_registry)));
@@ -470,10 +515,10 @@ impl TypeLoader {
             dependency_doc,
             foreign_imports,
             reexports,
-            &mut state.diag,
+            state.diag,
             &dependency_registry,
         );
-        crate::passes::run_import_passes(&doc, &state.tl, &mut state.diag);
+        crate::passes::run_import_passes(&doc, state.tl, state.diag);
         state.tl.all_documents.docs.insert(path.to_owned(), doc);
     }
 
@@ -520,8 +565,7 @@ impl TypeLoader {
         file_to_import: &str,
     ) -> Option<(PathBuf, Option<&'static [u8]>)> {
         // The directory of the current file is the first in the list of include directories.
-        let maybe_current_directory =
-            referencing_file.and_then(|path| path.parent()).map(|p| p.to_path_buf());
+        let maybe_current_directory = referencing_file.and_then(base_directory);
         maybe_current_directory
             .clone()
             .into_iter()
@@ -534,12 +578,15 @@ impl TypeLoader {
                     }
                 }
             }))
-            .chain(std::iter::once_with(|| format!("builtin:/{}", self.style).into()))
+            .chain(
+                (file_to_import == "std-widgets.slint"
+                    || referencing_file.map_or(false, |x| x.starts_with("builtin:/")))
+                .then(|| format!("builtin:/{}", self.style).into()),
+            )
             .find_map(|include_dir| {
                 let candidate = include_dir.join(file_to_import);
-                crate::fileaccess::load_file(&candidate).map(|virtual_file| {
-                    (virtual_file.canon_path.into(), virtual_file.builtin_contents)
-                })
+                crate::fileaccess::load_file(&candidate)
+                    .map(|virtual_file| (virtual_file.canon_path, virtual_file.builtin_contents))
             })
     }
 
@@ -595,7 +642,7 @@ impl TypeLoader {
     }
 
     /// Return an iterator over all the loaded file path
-    pub fn all_files<'b>(&'b self) -> impl Iterator<Item = &PathBuf> + 'b {
+    pub fn all_files(&self) -> impl Iterator<Item = &PathBuf> {
         self.all_documents.docs.keys()
     }
 
@@ -603,6 +650,31 @@ impl TypeLoader {
     pub fn all_documents(&self) -> impl Iterator<Item = &object_tree::Document> + '_ {
         self.all_documents.docs.values()
     }
+}
+
+/// return the base directory from which imports are loaded
+///
+/// For a .slint file, this is the parent directory.
+/// For a .rs file, this is relative to the CARGO_MANIFEST_DIR
+///
+/// Note: this function is only called for .rs path as part of the LSP or viewer.
+/// Because from a proc_macro, we don't actually know the path of the current file, and this
+/// is why we must be relative to CARGO_MANIFEST_DIR.
+pub fn base_directory(referencing_file: &Path) -> Option<PathBuf> {
+    if referencing_file.extension().map_or(false, |e| e == "rs") {
+        // For .rs file, this is a rust macro, and rust macro locates the file relative to the CARGO_MANIFEST_DIR which is the directory that has a Cargo.toml file.
+        let mut candidate = referencing_file;
+        loop {
+            candidate =
+                if let Some(c) = candidate.parent() { c } else { break referencing_file.parent() };
+            if candidate.join("Cargo.toml").exists() {
+                break Some(candidate);
+            }
+        }
+    } else {
+        referencing_file.parent()
+    }
+    .map(|p| p.to_path_buf())
 }
 
 #[test]
@@ -645,6 +717,45 @@ fn test_dependency_loading() {
 }
 
 #[test]
+fn test_dependency_loading_from_rust() {
+    let test_source_path: PathBuf =
+        [env!("CARGO_MANIFEST_DIR"), "tests", "typeloader"].iter().collect();
+
+    let mut incdir = test_source_path.clone();
+    incdir.push("incpath");
+
+    let mut compiler_config =
+        CompilerConfiguration::new(crate::generator::OutputFormat::Interpreter);
+    compiler_config.include_paths = vec![incdir];
+    compiler_config.style = Some("fluent".into());
+
+    let mut main_test_path = test_source_path;
+    main_test_path.push("some_rust_file.rs");
+
+    let mut test_diags = crate::diagnostics::BuildDiagnostics::default();
+    let doc_node = crate::parser::parse_file(main_test_path, &mut test_diags).unwrap();
+
+    let doc_node: syntax_nodes::Document = doc_node.into();
+
+    let global_registry = TypeRegister::builtin();
+
+    let registry = Rc::new(RefCell::new(TypeRegister::new(&global_registry)));
+
+    let mut build_diagnostics = BuildDiagnostics::default();
+
+    let mut loader = TypeLoader::new(global_registry, compiler_config, &mut build_diagnostics);
+
+    spin_on::spin_on(loader.load_dependencies_recursively(
+        &doc_node,
+        &mut build_diagnostics,
+        &registry,
+    ));
+
+    assert!(!test_diags.has_error());
+    assert!(!build_diagnostics.has_error());
+}
+
+#[test]
 fn test_load_from_callback_ok() {
     let ok = Rc::new(core::cell::Cell::new(false));
     let ok_ = ok.clone();
@@ -655,7 +766,7 @@ fn test_load_from_callback_ok() {
     compiler_config.open_import_fallback = Some(Rc::new(move |path| {
         let ok_ = ok_.clone();
         Box::pin(async move {
-            assert_eq!(path, "../FooBar.slint");
+            assert_eq!(path.replace('\\', "/"), "../FooBar.slint");
             assert!(!ok_.get());
             ok_.set(true);
             Some(Ok("export XX := Rectangle {} ".to_owned()))
@@ -666,7 +777,7 @@ fn test_load_from_callback_ok() {
     let doc_node = crate::parser::parse(
         r#"
 /* ... */
-import { XX } from "../FooBar.slint";
+import { XX } from "../Ab/.././FooBar.slint";
 X := XX {}
 "#
         .into(),

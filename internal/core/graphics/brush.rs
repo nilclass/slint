@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 /*!
 This module contains brush related types for the run-time library.
@@ -123,6 +123,51 @@ impl Brush {
                 g.stops()
                     .map(|s| GradientStop { color: s.color.darker(factor), position: s.position }),
             )),
+        }
+    }
+
+    /// Returns a new version of this brush with the opacity decreased by `factor`.
+    ///
+    /// The transparency is obtained by multiplying the alpha channel by `(1 - factor)`.
+    ///
+    /// See also [`Color::transparentize`]
+    #[must_use]
+    pub fn transparentize(&self, amount: f32) -> Self {
+        match self {
+            Brush::SolidColor(c) => Brush::SolidColor(c.transparentize(amount)),
+            Brush::LinearGradient(g) => Brush::LinearGradient(LinearGradientBrush::new(
+                g.angle(),
+                g.stops().map(|s| GradientStop {
+                    color: s.color.transparentize(amount),
+                    position: s.position,
+                }),
+            )),
+            Brush::RadialGradient(g) => {
+                Brush::RadialGradient(RadialGradientBrush::new_circle(g.stops().map(|s| {
+                    GradientStop { color: s.color.transparentize(amount), position: s.position }
+                })))
+            }
+        }
+    }
+
+    /// Returns a new version of this brush with the related color's opacities
+    /// set to `alpha`.
+    #[must_use]
+    pub fn with_alpha(&self, alpha: f32) -> Self {
+        match self {
+            Brush::SolidColor(c) => Brush::SolidColor(c.with_alpha(alpha)),
+            Brush::LinearGradient(g) => Brush::LinearGradient(LinearGradientBrush::new(
+                g.angle(),
+                g.stops().map(|s| GradientStop {
+                    color: s.color.with_alpha(alpha),
+                    position: s.position,
+                }),
+            )),
+            Brush::RadialGradient(g) => {
+                Brush::RadialGradient(RadialGradientBrush::new_circle(g.stops().map(|s| {
+                    GradientStop { color: s.color.with_alpha(alpha), position: s.position }
+                })))
+            }
         }
     }
 }

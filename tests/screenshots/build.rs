@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 use std::io::Write;
 use std::path::Path;
@@ -37,18 +37,10 @@ pub fn collect_test_cases() -> std::io::Result<Vec<test_driver_lib::TestCase>> {
 }
 
 fn main() -> std::io::Result<()> {
-    let default_font_path: std::path::PathBuf = [
-        env!("CARGO_MANIFEST_DIR"),
-        "..",
-        "..",
-        "examples",
-        "printerdemo",
-        "ui",
-        "fonts",
-        "NotoSans-Regular.ttf",
-    ]
-    .iter()
-    .collect();
+    let default_font_path: std::path::PathBuf =
+        [env!("CARGO_MANIFEST_DIR"), "..", "..", "examples", "printerdemo", "ui", "fonts"]
+            .iter()
+            .collect();
 
     std::env::set_var("SLINT_DEFAULT_FONT", default_font_path.clone());
     println!("cargo:rustc-env=SLINT_DEFAULT_FONT={}", default_font_path.display());
@@ -81,6 +73,20 @@ fn main() -> std::io::Result<()> {
         writeln!(generated_file, "#[path=\"{0}.rs\"] mod r#{0};", module_name)?;
         let source = std::fs::read_to_string(&testcase.absolute_path)?;
 
+        let needle = "SLINT_SCALE_FACTOR=";
+        let scale_factor = if let Some(p) = source.find(needle) {
+            let source = &source[p + needle.len()..];
+            let scale_factor: f32 = source
+                .find(char::is_whitespace)
+                .and_then(|end| source[..end].parse().ok())
+                .unwrap_or_else(|| {
+                    panic!("Cannot parse {needle} for {}", testcase.relative_path.display())
+                });
+            format!("slint::platform::WindowAdapter::window(&*window).dispatch_event(slint::platform::WindowEvent::ScaleFactorChanged {{ scale_factor: {scale_factor}f32 }});")
+        } else {
+            String::new()
+        };
+
         let mut output = std::fs::File::create(
             Path::new(&std::env::var_os("OUT_DIR").unwrap()).join(format!("{}.rs", module_name)),
         )?;
@@ -94,6 +100,7 @@ fn main() -> std::io::Result<()> {
     use crate::testing;
 
     let window = testing::init_swr();
+    {scale_factor}
     window.set_size(slint::PhysicalSize::new(64, 64));
     let screenshot = {reference_path};
 
@@ -112,6 +119,7 @@ fn main() -> std::io::Result<()> {
 
     //Make sure to use a consistent style
     println!("cargo:rustc-env=SLINT_STYLE=fluent");
+    println!("cargo:rustc-env=SLINT_ENABLE_EXPERIMENTAL_FEATURES=1");
 
     Ok(())
 }
@@ -132,6 +140,7 @@ fn generate_source(
     let mut compiler_config = CompilerConfiguration::new(generator::OutputFormat::Rust);
     compiler_config.include_paths = include_paths;
     compiler_config.embed_resources = EmbedResourcesKind::EmbedTextures;
+    compiler_config.enable_component_containers = true;
     compiler_config.style = Some("fluent".to_string());
     let (root_component, diag) =
         spin_on::spin_on(compile_syntax_node(syntax_node, diag, compiler_config));

@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
@@ -117,8 +117,14 @@ pub fn lower_expression(
                 lower_show_popup(arguments, ctx)
             }
             tree_Expression::BuiltinFunctionReference(f, _) => {
-                let arguments = arguments.iter().map(|e| lower_expression(e, ctx)).collect::<_>();
-                llr_Expression::BuiltinFunctionCall { function: *f, arguments }
+                let mut arguments =
+                    arguments.iter().map(|e| lower_expression(e, ctx)).collect::<Vec<_>>();
+                if *f == BuiltinFunction::Translate {
+                    if let llr_Expression::Array { as_model, .. } = &mut arguments[3] {
+                        *as_model = false;
+                    }
+                }
+                llr_Expression::BuiltinFunctionCall { function: f.clone(), arguments }
             }
             tree_Expression::CallbackReference(nr, _) => {
                 let arguments = arguments.iter().map(|e| lower_expression(e, ctx)).collect::<_>();
@@ -191,6 +197,12 @@ pub fn lower_expression(
         }
         tree_Expression::ComputeLayoutInfo(l, o) => compute_layout_info(l, *o, ctx),
         tree_Expression::SolveLayout(l, o) => solve_layout(l, *o, ctx),
+        tree_Expression::MinMax { ty, op, lhs, rhs } => llr_Expression::MinMax {
+            ty: ty.clone(),
+            op: *op,
+            lhs: Box::new(lower_expression(lhs, ctx)),
+            rhs: Box::new(lower_expression(rhs, ctx)),
+        },
     }
 }
 
@@ -355,7 +367,13 @@ fn lower_show_popup(args: &[tree_Expression], ctx: &ExpressionContext) -> llr_Ex
         );
         llr_Expression::BuiltinFunctionCall {
             function: BuiltinFunction::ShowPopupWindow,
-            arguments: vec![llr_Expression::NumberLiteral(popup_index as _), x, y, item_ref],
+            arguments: vec![
+                llr_Expression::NumberLiteral(popup_index as _),
+                x,
+                y,
+                llr_Expression::BoolLiteral(popup.close_on_click),
+                item_ref,
+            ],
         }
     } else {
         panic!("invalid arguments to ShowPopupWindow");
@@ -392,6 +410,7 @@ pub fn lower_animation(a: &PropertyAnimation, ctx: &ExpressionContext<'_>) -> An
             fields: animation_fields().collect(),
             name: Some("PropertyAnimation".into()),
             node: None,
+            rust_attributes: None,
         }
     }
 
@@ -429,6 +448,7 @@ pub fn lower_animation(a: &PropertyAnimation, ctx: &ExpressionContext<'_>) -> An
                     .collect(),
                     name: None,
                     node: None,
+                    rust_attributes: None,
                 },
                 values: IntoIterator::into_iter([
                     ("0".to_string(), get_anim),
@@ -655,6 +675,7 @@ fn box_layout_data(
         .collect(),
         name: Some("BoxLayoutCellData".into()),
         node: None,
+        rust_attributes: None,
     };
 
     if repeater_count == 0 {
@@ -741,6 +762,7 @@ pub(super) fn grid_layout_cell_data_ty() -> Type {
         .collect(),
         name: Some("GridLayoutCellData".into()),
         node: None,
+        rust_attributes: None,
     }
 }
 
@@ -837,6 +859,7 @@ fn compile_path(path: &crate::expression_tree::Path, ctx: &ExpressionContext) ->
                     fields: Default::default(),
                     name: Some("PathElement".to_owned()),
                     node: None,
+                    rust_attributes: None,
                 },
                 values: elements,
                 as_model: false,
@@ -860,6 +883,7 @@ fn compile_path(path: &crate::expression_tree::Path, ctx: &ExpressionContext) ->
                             .collect(),
                         name: element.element_type.native_class.cpp_type.clone(),
                         node: None,
+                        rust_attributes: None,
                     };
 
                     llr_Expression::Struct {
@@ -911,6 +935,7 @@ fn compile_path(path: &crate::expression_tree::Path, ctx: &ExpressionContext) ->
                         .collect(),
                         name: None,
                         node: None,
+                        rust_attributes: None,
                     },
                     values: IntoIterator::into_iter([
                         (
@@ -954,5 +979,8 @@ fn make_struct(
         values.insert(name.to_string(), expr);
     }
 
-    llr_Expression::Struct { ty: Type::Struct { fields, name: Some(name), node: None }, values }
+    llr_Expression::Struct {
+        ty: Type::Struct { fields, name: Some(name), node: None, rust_attributes: None },
+        values,
+    }
 }

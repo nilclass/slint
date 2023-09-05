@@ -1,7 +1,7 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
-// cSpell: ignore datetime dotdot
+// cSpell: ignore datetime dotdot gettext
 
 use anyhow::Context;
 use anyhow::Result;
@@ -14,7 +14,11 @@ struct LicenseTagStyle {
     tag_start: &'static str,
     line_prefix: &'static str,
     line_indentation: &'static str,
+    line_break: &'static str,
     tag_end: &'static str,
+    overall_start: &'static str,
+    overall_end: &'static str,
+    is_real_end: bool,
 }
 
 impl LicenseTagStyle {
@@ -23,7 +27,11 @@ impl LicenseTagStyle {
             tag_start: "// Copyright © ",
             line_prefix: "//",
             line_indentation: " ",
-            tag_end: const_format::concatcp!("// ", EXPECTED_SPDX_ID, '\n'),
+            line_break: "\n",
+            tag_end: const_format::concatcp!("// ", SPDX_LICENSE_LINE),
+            overall_start: "",
+            overall_end: "\n",
+            is_real_end: false,
         }
     }
 
@@ -32,7 +40,11 @@ impl LicenseTagStyle {
             tag_start: "# Copyright © ",
             line_prefix: "#",
             line_indentation: " ",
-            tag_end: const_format::concatcp!("# ", EXPECTED_SPDX_ID, '\n'),
+            line_break: "\n",
+            tag_end: const_format::concatcp!("# ", SPDX_LICENSE_LINE),
+            overall_start: "",
+            overall_end: "\n",
+            is_real_end: false,
         }
     }
 
@@ -41,7 +53,24 @@ impl LicenseTagStyle {
             tag_start: ".. Copyright © ",
             line_prefix: "..",
             line_indentation: " ",
-            tag_end: const_format::concatcp!(".. ", EXPECTED_SPDX_ID, '\n'),
+            line_break: "\n",
+            tag_end: const_format::concatcp!(".. ", SPDX_LICENSE_LINE),
+            overall_start: "",
+            overall_end: "\n",
+            is_real_end: false,
+        }
+    }
+
+    fn html_comment_style() -> Self {
+        Self {
+            tag_start: "<!-- Copyright © ",
+            line_prefix: " ",
+            line_indentation: "",
+            line_break: " ;",
+            tag_end: " -->",
+            overall_start: "<!--",
+            overall_end: " -->\n",
+            is_real_end: true,
         }
     }
 }
@@ -54,20 +83,51 @@ struct SourceFileWithTags<'a> {
 
 impl<'a> SourceFileWithTags<'a> {
     fn new(source: &'a str, style: &'a LicenseTagStyle) -> Self {
+        // This assumes that all LicenseTagStyle end with a SPDX license identifier line!
         let location = match source.find(style.tag_start) {
             Some(start) => {
-                let end = source[start..]
+                let end_tag = source[start..]
                     .find(style.tag_end)
                     .map(|idx| start + idx + style.tag_end.len())
                     .unwrap_or_default();
-                if end > start {
-                    Some(std::ops::Range { start, end })
+                if end_tag > start {
+                    if style.is_real_end {
+                        if source.as_bytes()[end_tag] == b'\n' {
+                            Some(std::ops::Range { start, end: end_tag + 1 })
+                        } else {
+                            Some(std::ops::Range { start, end: end_tag })
+                        }
+                    } else {
+                        let end = source[end_tag..]
+                            .find('\n')
+                            .map(|idx| end_tag + idx + 1)
+                            .unwrap_or(end_tag);
+                        Some(std::ops::Range { start, end })
+                    }
                 } else {
                     None
                 }
             }
             None => None,
         };
+
+        // Find default gettext copyright statements
+        let location = location.or_else(|| {
+            let Some(start) =
+                source.find("# SOME DESCRIPTIVE TITLE").or_else(|| source.find("# Copyright (C) "))
+            else {
+                return None;
+            };
+            let end_line = "# This file is distributed under the same license as the ";
+            let Some(end) = source[start..].find(end_line) else {
+                return None;
+            };
+            let end = start + end + end_line.len();
+            let Some(end_nl) = source[end..].find('\n') else {
+                return None;
+            };
+            Some(std::ops::Range { start, end: end + end_nl + 1 })
+        });
 
         Self { source, tag_style: style, tag_location: location }
     }
@@ -85,26 +145,26 @@ impl<'a> SourceFileWithTags<'a> {
         &self.source[tag_loc.start..tag_loc.end]
     }
 
-    fn tag_matches(&self, expected_tag: &LicenseHeader) -> bool {
+    fn tag_matches(&self, expected_tag: &LicenseHeader, license: &str) -> bool {
         let tag_loc = match &self.tag_location {
             Some(loc) => loc,
             None => return false,
         };
 
-        let expected_tag_str = expected_tag.to_string(self.tag_style);
+        let expected_tag_str = expected_tag.to_string(self.tag_style, license);
         let found_tag = &self.source[tag_loc.start..tag_loc.end];
         expected_tag_str == found_tag
     }
 
-    fn replace_tag(&self, replacement: &LicenseHeader) -> String {
+    fn replace_tag(&self, replacement: &LicenseHeader, license: &str) -> String {
         let loc = &self.tag_location;
         let next_char = if let Some(range) = loc {
             self.source.as_bytes().get(range.end)
         } else {
-            self.source.as_bytes().get(0)
+            self.source.as_bytes().first()
         };
 
-        let new_header = replacement.to_string(self.tag_style);
+        let new_header = replacement.to_string(self.tag_style, license);
         let new_header = if next_char == Some(&b'\n') || next_char.is_none() {
             new_header
         } else {
@@ -133,7 +193,7 @@ blah"#,
         );
         let test_source = SourceFileWithTags::new(&source, &style);
         assert_eq!(
-            test_source.replace_tag(&LicenseHeader(&["TEST_LICENSE"])),
+            test_source.replace_tag(&LicenseHeader(&["TEST_LICENSE"]), "foo"),
             r#"// TEST_LICENSE
 
 blah"#
@@ -151,7 +211,7 @@ blah"#,
         );
         let test_source = SourceFileWithTags::new(&source, &style);
         assert_eq!(
-            test_source.replace_tag(&LicenseHeader(&["TEST_LICENSE"])),
+            test_source.replace_tag(&LicenseHeader(&["TEST_LICENSE"]), "bar"),
             r#"// TEST_LICENSE
 
 blah"#
@@ -161,7 +221,7 @@ blah"#
     {
         let test_source = SourceFileWithTags::new("blah", &style);
         assert_eq!(
-            test_source.replace_tag(&LicenseHeader(&["TEST_LICENSE"])),
+            test_source.replace_tag(&LicenseHeader(&["TEST_LICENSE"]), "bar"),
             r#"// TEST_LICENSE
 
 blah"#
@@ -171,17 +231,18 @@ blah"#
     {
         let test_source = SourceFileWithTags::new("\nblah", &style);
         assert_eq!(
-            test_source.replace_tag(&LicenseHeader(&["TEST_LICENSE"])),
-            r#"// TEST_LICENSE
+            test_source.replace_tag(&LicenseHeader(&[SPDX_LICENSE_LINE]), "bar"),
+            String::from("// ")
+                + SPDX_LICENSE_LINE
+                + r#"bar
 
 blah"#
-                .to_string()
         );
     }
     {
         let test_source = SourceFileWithTags::new("", &style);
         assert_eq!(
-            test_source.replace_tag(&LicenseHeader(&["TEST_LICENSE"])),
+            test_source.replace_tag(&LicenseHeader(&["TEST_LICENSE"]), "bar"),
             r#"// TEST_LICENSE
 "#
             .to_string()
@@ -203,7 +264,7 @@ blah"#,
         );
         let test_source = SourceFileWithTags::new(&source, &style);
         assert_eq!(
-            test_source.replace_tag(&LicenseHeader(&["TEST_LICENSE"])),
+            test_source.replace_tag(&LicenseHeader(&["TEST_LICENSE"]), "bar"),
             r#"# TEST_LICENSE
 
 blah"#
@@ -213,7 +274,7 @@ blah"#
     {
         let test_source = SourceFileWithTags::new(r#"blah"#, &style);
         assert_eq!(
-            test_source.replace_tag(&LicenseHeader(&["TEST_LICENSE"])),
+            test_source.replace_tag(&LicenseHeader(&["TEST_LICENSE"]), "bar"),
             r#"# TEST_LICENSE
 
 blah"#
@@ -236,7 +297,7 @@ blah"#,
         );
         let test_source = SourceFileWithTags::new(&source, &style);
         assert_eq!(
-            test_source.replace_tag(&LicenseHeader(&["TEST_LICENSE"])),
+            test_source.replace_tag(&LicenseHeader(&["TEST_LICENSE"]), "bar"),
             r#".. TEST_LICENSE
 
 blah"#
@@ -246,11 +307,81 @@ blah"#
     {
         let test_source = SourceFileWithTags::new(r#"blah"#, &style);
         assert_eq!(
-            test_source.replace_tag(&LicenseHeader(&["TEST_LICENSE"])),
+            test_source.replace_tag(&LicenseHeader(&["TEST_LICENSE"]), "bar"),
             r#".. TEST_LICENSE
 
 blah"#
                 .to_string()
+        );
+    }
+}
+
+#[test]
+fn test_license_tag_html_style() {
+    let style = LicenseTagStyle::html_comment_style();
+    {
+        let source = format!(
+            r#"<!-- Copyright © something <bar@something.com>
+foobar
+// SP{}-License-Identifier: {} -->
+blah"#,
+            "DX", EXPECTED_SPDX_EXPRESSION
+        );
+        let test_source = SourceFileWithTags::new(&source, &style);
+        assert_eq!(
+            test_source.replace_tag(&LicenseHeader(&["TEST_LICENSE"]), "foo"),
+            r#"<!-- TEST_LICENSE -->
+
+blah"#
+                .to_string()
+        );
+    }
+    {
+        let source = format!(
+            r#"<!-- Copyright © something <bar@something.com>
+foobar
+ SP{}-License-Identifier: {} -->
+
+blah"#,
+            "DX", EXPECTED_SPDX_EXPRESSION
+        );
+        let test_source = SourceFileWithTags::new(&source, &style);
+        assert_eq!(
+            test_source.replace_tag(&LicenseHeader(&["TEST_LICENSE"]), "bar"),
+            r#"<!-- TEST_LICENSE -->
+
+blah"#
+                .to_string()
+        );
+    }
+    {
+        let test_source = SourceFileWithTags::new("blah", &style);
+        assert_eq!(
+            test_source.replace_tag(&LicenseHeader(&["TEST_LICENSE"]), "bar"),
+            r#"<!-- TEST_LICENSE -->
+
+blah"#
+                .to_string()
+        );
+    }
+    {
+        let test_source = SourceFileWithTags::new("\nblah", &style);
+        assert_eq!(
+            test_source.replace_tag(&LicenseHeader(&[SPDX_LICENSE_LINE]), "bar"),
+            String::from("<!-- ")
+                + SPDX_LICENSE_LINE
+                + r#"bar -->
+
+blah"#
+        );
+    }
+    {
+        let test_source = SourceFileWithTags::new("", &style);
+        assert_eq!(
+            test_source.replace_tag(&LicenseHeader(&["TEST_LICENSE"]), "bar"),
+            r#"<!-- TEST_LICENSE -->
+"#
+            .to_string()
         );
     }
 }
@@ -268,36 +399,40 @@ lazy_static! {
         // full matches
         ("^\\.cargo/config$", LicenseLocation::Tag(LicenseTagStyle::shell_comment_style())),
         ("^\\.clang-format$", LicenseLocation::NoLicense),
+        ("^\\.github/.*\\.md$", LicenseLocation::NoLicense),
         ("^\\.mailmap$", LicenseLocation::NoLicense),
         ("^\\.pre-commit-config\\.yaml$", LicenseLocation::NoLicense),
         ("^\\.reuse/dep5$", LicenseLocation::NoLicense), // .reuse files have no license headers
         ("^api/cpp/docs/Pipfile$", LicenseLocation::NoLicense),
-        ("^api/cpp/docs/conf.py$", LicenseLocation::NoLicense),
-        ("^docs/language/Pipfile$", LicenseLocation::NoLicense),
-        ("^docs/language/conf.py$", LicenseLocation::NoLicense),
-        ("^editors/tree-sitter-slint/binding.gyp$", LicenseLocation::NoLicense), // liberal license
-        ("^editors/tree-sitter-slint/test-to-corpus.py$", LicenseLocation::Tag(LicenseTagStyle::shell_comment_style())),
-        ("^editors/tree-sitter-slint/corpus/", LicenseLocation::NoLicense), // liberal license
-        ("^Cargo.lock$", LicenseLocation::NoLicense),
+        ("^api/cpp/docs/conf\\.py$", LicenseLocation::NoLicense),
+        ("^docs/reference/Pipfile$", LicenseLocation::NoLicense),
+        ("^docs/reference/conf\\.py$", LicenseLocation::NoLicense),
+        ("^editors/tree-sitter-slint/binding\\.gyp$", LicenseLocation::NoLicense), // liberal license
+        ("^editors/tree-sitter-slint/test-to-corpus\\.py$", LicenseLocation::Tag(LicenseTagStyle::shell_comment_style())),
+        ("^Cargo\\.lock$", LicenseLocation::NoLicense),
+
+        // filename based matches:
+        ("(^|/)CMakeLists\\.txt$", LicenseLocation::Tag(LicenseTagStyle::shell_comment_style())),
+        ("(^|/)Cargo\\.toml$", LicenseLocation::Crate),
+        ("(^|/)Dockerfile", LicenseLocation::Tag(LicenseTagStyle::shell_comment_style())),
+        ("(^|/)LICENSE$", LicenseLocation::NoLicense),
+        ("(^|/)LICENSE\\.QT$", LicenseLocation::NoLicense),
+        ("(^|/)README$", LicenseLocation::NoLicense),
+        ("(^|/)\\.eslintrc\\.yml$", LicenseLocation::NoLicense),
+        ("(^|/)memory\\.x$", LicenseLocation::NoLicense), // third-party file
+        ("(^|/)webpack\\..+\\.js$", LicenseLocation::NoLicense),
+        ("(^|/)partitions\\.csv$", LicenseLocation::Tag(LicenseTagStyle::shell_comment_style())),
+        ("(^|/)sdkconfig", LicenseLocation::NoLicense), // auto-generated
 
         // Path prefix matches:
+        ("^editors/tree-sitter-slint/corpus/", LicenseLocation::NoLicense), // liberal license
         ("^api/cpp/docs/_static/", LicenseLocation::NoLicense),
         ("^api/cpp/docs/_templates/", LicenseLocation::NoLicense),
         ("^docs/tutorial/theme/", LicenseLocation::NoLicense),
         ("^editors/tree-sitter-slint/queries/", LicenseLocation::NoLicense), // liberal license
-        ("^helper_crates/const-field-offset/", LicenseLocation::NoLicense), // liberal license
-        ("^helper_crates/document-features/", LicenseLocation::NoLicense), // liberal license
 
-        // Filename/directory based matches
-        ("[/^]CMakeLists.txt$", LicenseLocation::Tag(LicenseTagStyle::shell_comment_style())),
-        ("[/^]Cargo.toml$", LicenseLocation::Crate),
-        ("[/^]Dockerfile", LicenseLocation::Tag(LicenseTagStyle::shell_comment_style())),
-        ("[/^]LICENSES/", LicenseLocation::NoLicense),
-        ("[/^]LICENSE", LicenseLocation::NoLicense),
-        ("[/^]README$", LicenseLocation::NoLicense),
-        ("[/^]\\.eslintrc.yml$", LicenseLocation::NoLicense),
-        ("[/^]memory.x$", LicenseLocation::NoLicense), // third-party file
-        ("[/^]webpack\\..+\\.js$", LicenseLocation::NoLicense),
+        // directory based matches
+        ("(^|/)LICENSES/", LicenseLocation::NoLicense),
 
         // Extension matches:
         ("\\.60$", LicenseLocation::Tag(LicenseTagStyle::c_style_comment_style())),
@@ -310,15 +445,19 @@ lazy_static! {
         ("\\.gitignore$", LicenseLocation::NoLicense),
         ("\\.dockerignore$", LicenseLocation::NoLicense),
         ("\\.prettierignore$", LicenseLocation::NoLicense),
+        ("\\.npmignore$", LicenseLocation::NoLicense),
         ("\\.h$", LicenseLocation::Tag(LicenseTagStyle::c_style_comment_style())),
         ("\\.html$", LicenseLocation::NoLicense),
         ("\\.jpg$", LicenseLocation::NoLicense),
         ("\\.js$", LicenseLocation::Tag(LicenseTagStyle::c_style_comment_style())),
         ("\\.json$", LicenseLocation::NoLicense),
         ("\\.license$", LicenseLocation::NoLicense),
-        ("\\.md$", LicenseLocation::NoLicense),
+        ("\\.md$", LicenseLocation::Tag(LicenseTagStyle::html_comment_style())),
         ("\\.mjs$", LicenseLocation::Tag(LicenseTagStyle::c_style_comment_style())),
         ("\\.png$", LicenseLocation::NoLicense),
+        ("\\.mo$", LicenseLocation::NoLicense),
+        ("\\.po$", LicenseLocation::Tag(LicenseTagStyle::shell_comment_style())),
+        ("\\.pot$", LicenseLocation::Tag(LicenseTagStyle::shell_comment_style())),
         ("\\.rs$", LicenseLocation::Tag(LicenseTagStyle::c_style_comment_style())),
         ("\\.rst$", LicenseLocation::Tag(LicenseTagStyle::rst_comment_style())),
         ("\\.sh$", LicenseLocation::Tag(LicenseTagStyle::shell_comment_style())),
@@ -336,6 +475,24 @@ lazy_static! {
         ("\\.ui$", LicenseLocation::NoLicense),
         ("\\.xml$", LicenseLocation::NoLicense),
         ("\\.yaml$", LicenseLocation::Tag(LicenseTagStyle::shell_comment_style())),
+        ("\\.yml$", LicenseLocation::Tag(LicenseTagStyle::shell_comment_style())),
+    ]
+    .iter()
+    .map(|(re, ty)| (regex::Regex::new(re).unwrap(), *ty))
+    .collect();
+}
+
+lazy_static! {
+    static ref LICENSE_FOR_FILE: Vec<(regex::Regex, &'static str)> = [
+        ("^helper_crates/const-field-offset/", MIT_OR_APACHE2_LICENSE),
+        ("^helper_crates/vtable/", MIT_OR_APACHE2_LICENSE),
+        ("^api/cpp/esp-idf/LICENSE$", TRIPLE_LICENSE),
+        ("^examples/", MIT_LICENSE),
+        ("^docs/", MIT_LICENSE),
+        ("^api/cpp/docs/", MIT_LICENSE),
+        ("(^|/)(README|CONTRIBUTING|CHANGELOG|LICENSE)\\.md", TRIPLE_LICENSE),
+        (".*\\.md$", MIT_LICENSE),
+        (".*", TRIPLE_LICENSE),
     ]
     .iter()
     .map(|(re, ty)| (regex::Regex::new(re).unwrap(), *ty))
@@ -343,31 +500,51 @@ lazy_static! {
     // cspell:enable
 }
 
+const TRIPLE_LICENSE: &str =
+    "GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial";
+const MIT_LICENSE: &str = "MIT";
+const MIT_OR_APACHE2_LICENSE: &str = "MIT OR Apache-2.0";
+
 pub struct LicenseHeader<'a>(&'a [&'a str]);
 
 impl<'a> LicenseHeader<'a> {
-    fn to_string(&self, style: &LicenseTagStyle) -> String {
-        let mut result = String::new();
+    fn to_string(&self, style: &LicenseTagStyle, license: &str) -> String {
+        let mut result = String::from(style.overall_start);
+        let mut linebreak_needed = false;
+
         for line in self.0 {
+            if linebreak_needed {
+                result += style.line_break;
+            }
+
             result += style.line_prefix;
+
             if !line.is_empty() {
                 result += style.line_indentation;
             }
             result += line;
-            result += "\n";
+            if line == &SPDX_LICENSE_LINE {
+                result.push_str(license);
+            }
+            linebreak_needed = true;
         }
+
+        result += style.overall_end;
         result
     }
 }
 
-const EXPECTED_SPDX_EXPRESSION: &str = "GPL-3.0-only OR LicenseRef-Slint-commercial";
-const EXPECTED_SPDX_ID: &str =
-    const_format::concatcp!("SP", "DX-License-Identifier: ", EXPECTED_SPDX_EXPRESSION); // Do not confuse the reuse tool
+#[cfg(test)]
+const EXPECTED_SPDX_EXPRESSION: &str =
+    "GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial";
+
+const SPDX_LICENSE_ID: &str = const_format::concatcp!("SP", "DX-License-Identifier:"); // Do not confuse the reuse tool
+const SPDX_LICENSE_LINE: &str = const_format::concatcp!(SPDX_LICENSE_ID, " "); // Do not confuse the reuse tool
 
 const EXPECTED_HEADER: LicenseHeader<'static> =
-    LicenseHeader(&["Copyright © SixtyFPS GmbH <info@slint-ui.com>", EXPECTED_SPDX_ID]);
+    LicenseHeader(&["Copyright © SixtyFPS GmbH <info@slint.dev>", SPDX_LICENSE_LINE]);
 
-const EXPECTED_HOMEPAGE: &str = "https://slint-ui.com";
+const EXPECTED_HOMEPAGE: &str = "https://slint.dev";
 const ALLOWED_HOMEPAGE: &str = "https://slint.rs";
 const EXPECTED_REPOSITORY: &str = "https://github.com/slint-ui/slint";
 
@@ -428,6 +605,7 @@ impl CargoDependency {
 }
 
 struct CargoToml {
+    path: std::path::PathBuf,
     doc: toml_edit::Document,
     edited: bool,
 }
@@ -435,7 +613,7 @@ struct CargoToml {
 impl CargoToml {
     fn new(path: &Path) -> Result<Self> {
         let source = &std::fs::read_to_string(path).context("Error reading file")?;
-        Ok(Self { doc: source.parse()?, edited: false })
+        Ok(Self { doc: source.parse()?, edited: false, path: path.to_path_buf() })
     }
 
     fn is_workspace(&self) -> bool {
@@ -446,13 +624,12 @@ impl CargoToml {
         self.doc
             .as_table()
             .get("package")
-            .map(|p| p.as_table())
-            .flatten()
+            .and_then(|p| p.as_table())
             .ok_or_else(|| anyhow::anyhow!("Invalid Cargo.toml -- cannot find package section"))
     }
 
     fn dependencies(&self, dep_type: &str) -> Vec<(String, CargoDependency)> {
-        match self.doc.as_table().get(dep_type).map(|d| d.as_table()).flatten() {
+        match self.doc.as_table().get(dep_type).and_then(|d| d.as_table()) {
             Some(dep_table) => dep_table
                 .iter()
                 .filter_map(|(name, entry)| {
@@ -472,26 +649,30 @@ impl CargoToml {
         expected_str: &'a str,
     ) -> Result<()> {
         match self.package()?.get(field) {
-            Some(field_value) => match field_value.as_str() {
-                Some(text) => {
-                    if text != expected_str {
-                        if fix_it {
-                            self.doc["package"][field] = toml_edit::value(expected_str);
-                            self.edited = true;
-                        } else {
-                            return Err(anyhow::anyhow!(
-                                "Incorrect {}. Found {} expected {}",
-                                field,
-                                text,
-                                expected_str
-                            ));
+            Some(field_value) => {
+                match field_value.as_str() {
+                    Some(text) => {
+                        if text != expected_str {
+                            if fix_it {
+                                eprintln!("Fixing up {:?} as instructed. It has unexpected data in {field}.", self.path);
+                                self.doc["package"][field] = toml_edit::value(expected_str);
+                                self.edited = true;
+                            } else {
+                                return Err(anyhow::anyhow!(
+                                    "Incorrect {}. Found {} expected {}",
+                                    field,
+                                    text,
+                                    expected_str
+                                ));
+                            }
                         }
                     }
+                    None => return Err(anyhow::anyhow!("{} field is not a string", field)),
                 }
-                None => return Err(anyhow::anyhow!("{} field is not a string", field)),
-            },
+            }
             None => {
                 if fix_it {
+                    eprintln!("Fixing up {:?} as instructed. It has no {field}.", self.path);
                     self.doc["package"][field] = toml_edit::value(expected_str);
                     self.edited = true;
                 } else {
@@ -506,9 +687,9 @@ impl CargoToml {
         Ok(self.package()?.get("publish").map(|v| v.as_bool().unwrap()).unwrap_or(true))
     }
 
-    fn save_if_changed(&self, path: &Path) -> Result<()> {
+    fn save_if_changed(&self) -> Result<()> {
         if self.edited {
-            std::fs::write(path, &self.doc.to_string()).context("Error writing new Cargo.toml")
+            std::fs::write(&self.path, self.doc.to_string()).context("Error writing new Cargo.toml")
         } else {
             Ok(())
         }
@@ -553,48 +734,46 @@ impl LicenseHeaderCheck {
         }
     }
 
-    fn check_file_tags(&self, path: &Path, style: &LicenseTagStyle) -> Result<()> {
+    fn check_file_tags(&self, path: &Path, style: &LicenseTagStyle, license: &str) -> Result<()> {
         let source = &std::fs::read_to_string(path).context("Error reading file")?;
 
         let source = SourceFileWithTags::new(source, style);
 
         if !source.has_tag() {
             if self.fix_it {
-                eprintln!(
-                    "Fixing up {} as instructed. It's missing a license header.",
-                    path.to_str().unwrap()
-                );
-                let source = source.replace_tag(&EXPECTED_HEADER);
-                std::fs::write(path, &source).context("Error writing source")
+                eprintln!("Fixing up {path:?} as instructed. It's missing a license header.");
+                let source = source.replace_tag(&EXPECTED_HEADER, license);
+                std::fs::write(path, source).context("Error writing source")
             } else {
                 Err(anyhow::anyhow!("Missing tag"))
             }
-        } else if source.tag_matches(&EXPECTED_HEADER) {
+        } else if source.tag_matches(&EXPECTED_HEADER, license) {
             Ok(())
         } else if self.fix_it {
-            let source = source.replace_tag(&EXPECTED_HEADER);
-            std::fs::write(path, &source).context("Error writing new source")
+            eprintln!("Fixing up {path:?} as instructed. It has a wrong license header.");
+            let source = source.replace_tag(&EXPECTED_HEADER, license);
+            std::fs::write(path, source).context("Error writing new source")
         } else {
             Err(anyhow::anyhow!(
                 "unexpected header.\nexpected: {}\nfound: {}",
-                EXPECTED_HEADER.to_string(style),
+                EXPECTED_HEADER.to_string(style, license),
                 source.found_tag()
             ))
         }
     }
 
-    fn check_cargo_toml(&self, path: &Path) -> Result<()> {
+    fn check_cargo_toml(&self, path: &Path, license: &str) -> Result<()> {
         let mut doc = CargoToml::new(path)?;
 
         if doc.is_workspace() {
             return Ok(());
         }
 
-        doc.check_and_fix_package_string_field(self.fix_it, "license", EXPECTED_SPDX_EXPRESSION)?;
+        doc.check_and_fix_package_string_field(self.fix_it, "license", license)?;
 
         if !doc.published()? {
             // Skip further tests for package that are not published
-            return Ok(());
+            return doc.save_if_changed();
         }
 
         if doc.check_and_fix_package_string_field(false, "homepage", ALLOWED_HOMEPAGE).is_err() {
@@ -644,11 +823,7 @@ impl LicenseHeaderCheck {
             }
         }
 
-        if self.fix_it {
-            doc.save_if_changed(path)?;
-        }
-
-        Ok(())
+        doc.save_if_changed()
     }
 
     fn check_file(&self, path: &Path) -> Result<()> {
@@ -659,11 +834,20 @@ impl LicenseHeaderCheck {
             .find_map(|(regex, style)| if regex.is_match(path_str) { Some(style) } else { None })
             .with_context(|| "Cannot determine the expected license header style. Please fix the license checking xtask.")?;
 
+        let license = LICENSE_FOR_FILE
+            .iter()
+            .find_map(
+                |(regex, license)| if regex.is_match(path_str) { Some(license) } else { None },
+            )
+            .with_context(|| {
+                "Cannot determine the expected license. Please fix the license checking xtask."
+            })?;
+
         match location {
-            LicenseLocation::Tag(tag_style) => self.check_file_tags(path, tag_style),
+            LicenseLocation::Tag(tag_style) => self.check_file_tags(path, tag_style, license),
             LicenseLocation::Crate => {
-                self.check_file_tags(path, &LicenseTagStyle::shell_comment_style())?;
-                self.check_cargo_toml(path)
+                self.check_file_tags(path, &LicenseTagStyle::shell_comment_style(), license)?;
+                self.check_cargo_toml(path, license)
             }
             LicenseLocation::NoLicense => {
                 if self.verbose {

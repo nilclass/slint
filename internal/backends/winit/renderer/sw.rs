@@ -1,86 +1,82 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 //! Delegate the rendering to the [`i_slint_core::software_renderer::SoftwareRenderer`]
 
-use i_slint_core::api::PhysicalSize as PhysicalWindowSize;
 use i_slint_core::graphics::Rgb8Pixel;
 use i_slint_core::platform::PlatformError;
 use i_slint_core::software_renderer::PremultipliedRgbaColor;
 pub use i_slint_core::software_renderer::SoftwareRenderer;
-use i_slint_core::window::WindowAdapter;
 use std::cell::RefCell;
-use std::rc::{Rc, Weak};
 
 pub struct WinitSoftwareRenderer {
     renderer: SoftwareRenderer,
-    canvas: RefCell<Option<softbuffer::GraphicsContext>>,
+    _context: softbuffer::Context,
+    surface: RefCell<softbuffer::Surface>,
 }
 
 impl super::WinitCompatibleRenderer for WinitSoftwareRenderer {
-    const NAME: &'static str = "Software";
-
-    fn new(window_adapter_weak: &Weak<dyn WindowAdapter>) -> Result<Self, PlatformError> {
-        Ok(Self {
-            renderer: SoftwareRenderer::new(
-                i_slint_core::software_renderer::RepaintBufferType::NewBuffer,
-                window_adapter_weak.clone(),
-            ),
-            canvas: Default::default(),
-        })
-    }
-
-    fn show(
-        &self,
+    fn new(
         window_builder: winit::window::WindowBuilder,
-    ) -> Result<Rc<winit::window::Window>, PlatformError> {
-        let window = crate::event_loop::with_window_target(|event_loop| {
+    ) -> Result<(Self, winit::window::Window), PlatformError> {
+        let winit_window = crate::event_loop::with_window_target(|event_loop| {
             window_builder.build(event_loop.event_loop_target()).map_err(|winit_os_error| {
                 format!("Error creating native window for software rendering: {}", winit_os_error)
             })
         })?;
-        let window = Rc::new(window);
 
-        *self.canvas.borrow_mut() = Some(unsafe {
-            softbuffer::GraphicsContext::new(window.as_ref(), window.as_ref()).map_err(
-                |softbuffer_error| {
-                    format!("Error creating softbuffer graphics context: {}", softbuffer_error)
-                },
-            )?
-        });
+        let context = unsafe {
+            softbuffer::Context::new(&winit_window)
+                .map_err(|e| format!("Error creating softbuffer context: {e}"))?
+        };
 
-        Ok(window)
+        let surface = unsafe { softbuffer::Surface::new(&context, &winit_window) }.map_err(
+            |softbuffer_error| format!("Error creating softbuffer surface: {}", softbuffer_error),
+        )?;
+
+        Ok((
+            Self {
+                renderer: SoftwareRenderer::new(),
+                _context: context,
+                surface: RefCell::new(surface),
+            },
+            winit_window,
+        ))
     }
 
-    fn hide(&self) -> Result<(), PlatformError> {
-        self.canvas.borrow_mut().take();
-        Ok(())
-    }
+    fn render(&self, window: &i_slint_core::api::Window) -> Result<(), PlatformError> {
+        let size = window.size();
 
-    fn render(&self, size: PhysicalWindowSize) -> Result<(), PlatformError> {
-        let mut canvas = if self.canvas.borrow().is_some() {
-            std::cell::RefMut::map(self.canvas.borrow_mut(), |canvas_opt| {
-                canvas_opt.as_mut().unwrap()
-            })
-        } else {
+        let Some((width, height)) = size.width.try_into().ok().zip(size.height.try_into().ok())
+        else {
+            // Nothing to render
             return Ok(());
         };
 
-        let width = size.width as usize;
-        let height = size.height as usize;
+        let mut surface = self.surface.borrow_mut();
 
-        let softbuffer_buffer = if std::env::var_os("SLINT_LINE_BY_LINE").is_none() {
-            let mut buffer = vec![PremultipliedRgbaColor::default(); width * height];
-            self.renderer.render(buffer.as_mut_slice(), width);
-            buffer
-                .into_iter()
-                .map(|pixel| {
-                    (pixel.alpha as u32) << 24
-                        | ((pixel.red as u32) << 16)
-                        | ((pixel.green as u32) << 8)
-                        | (pixel.blue as u32)
-                })
-                .collect::<Vec<_>>()
+        surface
+            .resize(width, height)
+            .map_err(|e| format!("Error resizing softbuffer surface: {e}"))?;
+
+        let mut target_buffer = surface
+            .buffer_mut()
+            .map_err(|e| format!("Error retrieving softbuffer rendering buffer: {e}"))?;
+
+        if std::env::var_os("SLINT_LINE_BY_LINE").is_none() {
+            let mut buffer = vec![
+                PremultipliedRgbaColor::default();
+                width.get() as usize * height.get() as usize
+            ];
+            self.renderer.render(buffer.as_mut_slice(), width.get() as usize);
+
+            for i in 0..target_buffer.len() {
+                let pixel = buffer[i];
+                target_buffer[i] = (pixel.alpha as u32) << 24
+                    | ((pixel.red as u32) << 16)
+                    | ((pixel.green as u32) << 8)
+                    | (pixel.blue as u32);
+            }
         } else {
             struct FrameBuffer<'a> {
                 buffer: &'a mut [u32],
@@ -104,19 +100,14 @@ impl super::WinitCompatibleRenderer for WinitSoftwareRenderer {
                     }
                 }
             }
-            let mut softbuffer_buffer = vec![0u32; width * height];
             self.renderer.render_by_line(FrameBuffer {
-                buffer: &mut softbuffer_buffer,
-                line: vec![Default::default(); width],
+                buffer: &mut target_buffer,
+                line: vec![Default::default(); width.get() as usize],
             });
-            softbuffer_buffer
         };
-        canvas.set_buffer(&softbuffer_buffer, width as u16, height as u16);
 
-        Ok(())
-    }
+        target_buffer.present().map_err(|e| format!("Error presenting softbuffer buffer: {e}"))?;
 
-    fn resize_event(&self, _size: PhysicalWindowSize) -> Result<(), PlatformError> {
         Ok(())
     }
 

@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -142,7 +142,7 @@ impl SourceFileInner {
 pub type SourceFile = Rc<SourceFileInner>;
 
 pub fn load_from_path(path: &Path) -> Result<String, Diagnostic> {
-    (if path == Path::new("-") {
+    let string = (if path == Path::new("-") {
         let mut buffer = Vec::new();
         let r = std::io::stdin().read_to_end(&mut buffer);
         r.and_then(|_| {
@@ -159,7 +159,20 @@ pub fn load_from_path(path: &Path) -> Result<String, Diagnostic> {
             span: Default::default(),
         },
         level: DiagnosticLevel::Error,
-    })
+    })?;
+
+    if path.extension().map_or(false, |e| e == "rs") {
+        return crate::lexer::extract_rust_macro(string).ok_or_else(|| Diagnostic {
+            message: "No `slint!` macro".into(),
+            span: SourceLocation {
+                source_file: Some(SourceFileInner::from_path_only(path.to_owned())),
+                span: Default::default(),
+            },
+            level: DiagnosticLevel::Error,
+        });
+    }
+
+    Ok(string)
 }
 
 #[derive(Debug, Clone, Default)]

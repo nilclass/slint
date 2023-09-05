@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -44,6 +44,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for testcase in test_driver_lib::collect_test_cases("cases")? {
         let test_function_name = testcase.identifier();
+
+        if &test_function_name == "elements_component_container" {
+            // FIXME: Skip embedding test on C++ since ComponentFactory is not
+            // implemented there!
+            continue;
+        }
 
         write!(
             tests_file,

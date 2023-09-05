@@ -1,10 +1,10 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 // cSpell: ignore imum
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::expression_tree::BuiltinFunction;
@@ -53,6 +53,7 @@ macro_rules! declare_enums {
                         name: stringify!($Name).replace('_', "-"),
                         values: vec![$(crate::generator::to_kebab_case(stringify!($Value).trim_start_matches("r#"))),*],
                         default_value: 0,
+                        node: None,
                     })),*
                 }
             }
@@ -70,8 +71,77 @@ macro_rules! declare_enums {
 
 i_slint_common::for_each_enums!(declare_enums);
 
+macro_rules! map_type {
+    ($pub_type:ident, bool) => {
+        Type::Bool
+    };
+    ($pub_type:ident, i32) => {
+        Type::Int32
+    };
+    ($pub_type:ident, f32) => {
+        Type::Float32
+    };
+    ($pub_type:ident, SharedString) => {
+        Type::String
+    };
+    ($pub_type:ident, Coord) => {
+        Type::LogicalLength
+    };
+    ($pub_type:ident, KeyboardModifiers) => {
+        $pub_type.clone()
+    };
+    ($pub_type:ident, $dup_pub_type:ident) => {
+        BUILTIN_ENUMS.with(|e| Type::Enumeration(e.$pub_type.clone()))
+    };
+}
+
+macro_rules! declare_export_structs {
+    ($(
+        $(#[$attr:meta])*
+        struct $Name:ident {
+            @name = $inner_name:literal
+            export {
+                $( $(#[$pub_attr:meta])* $pub_field:ident : $pub_type:ident, )*
+            }
+            private {
+                $( $(#[$pri_attr:meta])* $pri_field:ident : $pri_type:ty, )*
+            }
+        }
+    )*) => {
+        pub struct ExportStructs {
+            $(pub $Name: Type),*
+        }
+        impl ExportStructs {
+            fn new() -> Self {
+                $(let $Name = Type::Struct {
+                    fields: BTreeMap::from([
+                        $((stringify!($pub_field).replace('_', "-"), map_type!($pub_type, $pub_type))),*
+                    ]),
+                    name: Some(format!("{}", $inner_name)),
+                    node: None,
+                    rust_attributes: None,
+                };)*
+
+                Self {
+                    $($Name: $Name),*
+                }
+            }
+            fn fill_register(&self, register: &mut TypeRegister) {
+                $(
+                register.insert_type_with_name(
+                    self.$Name.clone(),
+                    stringify!($Name).to_string()
+                );)*
+            }
+        }
+    };
+}
+
+i_slint_common::for_each_builtin_structs!(declare_export_structs);
+
 thread_local! {
     pub static BUILTIN_ENUMS: BuiltinEnums = BuiltinEnums::new();
+    static EXPORT_STRUCTS: ExportStructs = ExportStructs::new();
 }
 
 const RESERVED_OTHER_PROPERTIES: &[(&str, Type)] = &[
@@ -117,6 +187,7 @@ pub fn reserved_properties() -> impl Iterator<Item = (&'static str, Type)> {
         .chain(RESERVED_ROTATION_PROPERTIES.iter())
         .chain(RESERVED_ACCESSIBILITY_PROPERTIES.iter())
         .map(|(k, v)| (*k, v.clone()))
+        .chain(IntoIterator::into_iter([("absolute-position", logical_point_type())]))
         .chain(IntoIterator::into_iter([
             ("forward-focus", Type::ElementReference),
             ("focus", BuiltinFunction::SetFocusItem.ty()),
@@ -211,7 +282,7 @@ impl TypeRegister {
         self.types.insert(name, t);
     }
 
-    pub fn builtin() -> Rc<RefCell<Self>> {
+    fn builtin_internal() -> Self {
         let mut register = TypeRegister::default();
 
         register.insert_type(Type::Float32);
@@ -220,6 +291,7 @@ impl TypeRegister {
         register.insert_type(Type::PhysicalLength);
         register.insert_type(Type::LogicalLength);
         register.insert_type(Type::Color);
+        register.insert_type(Type::ComponentFactory);
         register.insert_type(Type::Duration);
         register.insert_type(Type::Image);
         register.insert_type(Type::Bool);
@@ -229,6 +301,7 @@ impl TypeRegister {
         register.insert_type(Type::Angle);
         register.insert_type(Type::Brush);
         register.insert_type(Type::Rem);
+        register.types.insert("Point".into(), logical_point_type());
 
         BUILTIN_ENUMS.with(|e| e.fill_register(&mut register));
 
@@ -240,6 +313,7 @@ impl TypeRegister {
         register.supported_property_animation_types.insert(Type::Brush.to_string());
         register.supported_property_animation_types.insert(Type::Angle.to_string());
 
+        EXPORT_STRUCTS.with(|e| e.fill_register(&mut register));
         crate::load_builtins::load_builtins(&mut register);
 
         let mut context_restricted_types = HashMap::new();
@@ -259,9 +333,34 @@ impl TypeRegister {
                     .unwrap()
                     .member_functions
                     .insert("show".into(), BuiltinFunction::ShowPopupWindow);
+                Rc::get_mut(b).unwrap().properties.insert(
+                    "close".into(),
+                    BuiltinPropertyInfo::new(BuiltinFunction::ClosePopupWindow.ty()),
+                );
+                Rc::get_mut(b)
+                    .unwrap()
+                    .member_functions
+                    .insert("close".into(), BuiltinFunction::ClosePopupWindow);
             }
+
             _ => unreachable!(),
         };
+
+        register
+    }
+
+    #[doc(hidden)]
+    /// All builtins incl. experimental ones! Do not use in production code!
+    pub fn builtin_experimental() -> Rc<RefCell<Self>> {
+        let register = Self::builtin_internal();
+        Rc::new(RefCell::new(register))
+    }
+
+    pub fn builtin() -> Rc<RefCell<Self>> {
+        let mut register = Self::builtin_internal();
+
+        register.elements.remove("ComponentContainer");
+        register.types.remove("component-factory");
 
         Rc::new(RefCell::new(register))
     }
@@ -385,5 +484,18 @@ impl TypeRegister {
             Some(parent) => parent.borrow().empty_type(),
             None => self.empty_type.clone(),
         }
+    }
+}
+
+pub fn logical_point_type() -> Type {
+    Type::Struct {
+        fields: IntoIterator::into_iter([
+            ("x".to_owned(), Type::LogicalLength),
+            ("y".to_owned(), Type::LogicalLength),
+        ])
+        .collect(),
+        name: Some("slint::LogicalPosition".into()),
+        node: None,
+        rust_attributes: None,
     }
 }

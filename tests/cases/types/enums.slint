@@ -1,0 +1,34 @@
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+
+export enum Foo { bli, bla, blu }
+
+export component TestCase  {
+    in-out property<Foo> foo: Foo.bla;
+    in-out property<Foo> default;
+
+    out property <bool> test: foo == Foo.bla && default == Foo.bli;
+}
+
+/*
+```rust
+let instance = TestCase::new().unwrap();
+
+assert_eq!(instance.get_foo(), Foo::Bla);
+assert!(instance.get_test());
+instance.set_foo(Foo::Blu);
+assert!(!instance.get_test());
+
+```
+
+```cpp
+auto handle = TestCase::create();
+const TestCase &instance = *handle;
+
+assert(instance.get_foo() == Foo::Bla);
+assert(instance.get_test());
+instance.set_foo(Foo::Blu);
+assert(!instance.get_test());
+```
+
+*/

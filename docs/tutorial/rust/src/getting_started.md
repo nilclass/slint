@@ -1,3 +1,4 @@
+<!-- Copyright © SixtyFPS GmbH <info@slint.dev> ; SPDX-License-Identifier: MIT -->
 # Getting Started
 
 We assume that you are a somewhat familiar with Rust, and that you know how to create a Rust application with
@@ -15,10 +16,10 @@ cd memory
 Then we edit `Cargo.toml` to add the slint dependency using `cargo add`:
 
 ```sh
-cargo add slint@1.0.3
+cargo add slint@1.2.0
 ```
 
-Finally we copy the hello world program from the [Slint documentation](https://slint-ui.com/docs/rust/slint/) into our `src/main.rs`:
+Finally we copy the hello world program from the [Slint documentation](https://slint.dev/docs/rust/slint/) into our `src/main.rs`:
 
 ```rust,noplayground
 {{#include main_initial.rs:main}}
@@ -26,4 +27,4 @@ Finally we copy the hello world program from the [Slint documentation](https://s
 
 We run this example with `cargo run` and a window will appear with the green "Hello World" greeting.
 
-![Screenshot of initial tutorial app showing Hello World](https://slint-ui.com/blog/memory-game-tutorial/getting-started.png "Hello World")
+![Screenshot of initial tutorial app showing Hello World](https://slint.dev/blog/memory-game-tutorial/getting-started.png "Hello World")

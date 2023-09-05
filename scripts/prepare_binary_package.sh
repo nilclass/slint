@@ -1,6 +1,6 @@
 #!/bin/bash -e
-# Copyright © SixtyFPS GmbH <info@slint-ui.com>
-# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+# Copyright © SixtyFPS GmbH <info@slint.dev>
+# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 if [ $# -lt 1 ]; then
     echo "usage: $0 path/to/target/binary_package --with-qt"
@@ -91,6 +91,7 @@ accepted = [
     "ISC",
     "Unicode-DFS-2016",
     "OpenSSL",
+    "WTFPL",
     "GPL-3.0", # That's only for Slint
 ]
 targets = [
@@ -106,5 +107,5 @@ EOT
 cargo about generate about.hbs -o $target_path/index.html
 
 if [ "$2x" == "--with-qtx" ]; then
-    cp internal/backends/qt/LICENSE.QT internal/backends/qt/QtThirdPartySoftware_Listing.txt $target_path/
+    cp `dirname $0`/../internal/backends/qt/LICENSE.QT `dirname $0`/../internal/backends/qt/QtThirdPartySoftware_Listing.txt $target_path/
 fi

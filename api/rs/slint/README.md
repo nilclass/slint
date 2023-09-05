@@ -1,3 +1,4 @@
+<!-- Copyright © SixtyFPS GmbH <info@slint.dev> ; SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial -->
 # Slint
 
 [![Crates.io](https://img.shields.io/crates/v/slint)](https://crates.io/crates/slint)
@@ -12,7 +13,7 @@ The complete Rust documentation for Slint can be viewed online at https://slint.
 
 ## Getting Started
 
-The [crate documentation](https://slint-ui.com/docs/rust/slint/) shows how to use this crate.
+The [crate documentation](https://slint.dev/docs/rust/slint/) shows how to use this crate.
 
 ### Hello World
 
@@ -22,7 +23,7 @@ In your `Cargo.toml` add:
 
 ```toml
 [dependencies]
-slint = "1.0.0"
+slint = "1.2.0"
 ```
 
 And in your `main.rs`:
@@ -41,7 +42,7 @@ fn main() {
 }
 ```
 
-The [`slint` crate documentation](https://slint-ui.com/docs/rust/slint/)
+The [`slint` crate documentation](https://slint.dev/docs/rust/slint/)
 contains more advanced examples and alternative ways to use this crate.
 
 To quickly get started, you can use the [Template Repository](https://github.com/slint-ui/slint-rust-template) with

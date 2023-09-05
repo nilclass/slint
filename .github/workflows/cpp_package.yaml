@@ -1,5 +1,5 @@
-# Copyright © SixtyFPS GmbH <info@slint-ui.com>
-# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+# Copyright © SixtyFPS GmbH <info@slint.dev>
+# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 name: Build the C++ binary package
 
@@ -10,7 +10,7 @@ on:
 jobs:
   cmake_package:
     env:
-      DYLD_FRAMEWORK_PATH: /Users/runner/work/slint/Qt/6.2.1/clang_64/lib
+      DYLD_FRAMEWORK_PATH: /Users/runner/work/slint/Qt/6.5.1/clang_64/lib
       QT_QPA_PLATFORM: offscreen
       CARGO_INCREMENTAL: false
     strategy:
@@ -20,26 +20,32 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     - uses: ./.github/actions/install-linux-dependencies
+      with:
+        old-ubuntu: true
     - name: Install Qt (Ubuntu)
       uses: jurplel/install-qt-action@v3
       if: matrix.os == 'ubuntu-20.04'
       with:
         version: 5.15.2
+        cache: true
     - name: Install Qt (cached)
       if: matrix.os != 'ubuntu-20.04'
       uses: jurplel/install-qt-action@v3
       with:
-        version: 6.2.1
+        version: 6.5.1
+        cache: true
     - uses: ./.github/actions/setup-rust
     - uses: baptiste0928/cargo-install@v2
       with:
         crate: cargo-about
     - name: Prepare licenses (with Qt)
       if: matrix.os == 'windows-2022' || matrix.os == 'macOS-11'
-      run: bash -x ./scripts/prepare_binary_package.sh . --with-qt
+      run: bash -x ../../scripts/prepare_binary_package.sh ../.. --with-qt
+      working-directory: api/cpp/
     - name: Prepare licenses (without Qt)
       if: matrix.os != 'windows-2022' && matrix.os != 'macOS-11'
-      run: bash -x ./scripts/prepare_binary_package.sh .
+      run: bash -x ../../scripts/prepare_binary_package.sh ../..
+      working-directory: api/cpp/
     - uses: ilammy/msvc-dev-cmd@v1
     - name: Select MSVC (windows)
       run: |

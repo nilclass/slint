@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 /*! Module handling mouse events
 */
@@ -8,6 +8,7 @@
 use crate::item_tree::{ItemRc, ItemWeak, VisitChildrenResult};
 pub use crate::items::PointerEventButton;
 use crate::items::{ItemRef, TextCursorDirection};
+pub use crate::items::{KeyEvent, KeyboardModifiers};
 use crate::lengths::{LogicalPoint, LogicalVector};
 use crate::timers::Timer;
 use crate::window::{WindowAdapter, WindowInner};
@@ -79,7 +80,7 @@ impl MouseEvent {
 /// to notify the run-time about how the event was handled and
 /// what the next steps are.
 /// See [`crate::items::ItemVTable::input_event`].
-#[repr(C)]
+#[repr(u8)]
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Default)]
 pub enum InputEventResult {
     /// The event was accepted. This may result in additional events, for example
@@ -126,20 +127,25 @@ pub enum InputEventFilterResult {
 #[allow(missing_docs, non_upper_case_globals)]
 pub mod key_codes {
     macro_rules! declare_consts_for_special_keys {
-       ($($char:literal # $name:ident # $($_qt:ident)|* # $($_winit:ident)|* ;)*) => {
+       ($($char:literal # $name:ident # $($_qt:ident)|* # $($_winit:ident)|*    # $($_xkb:ident)|*;)*) => {
             $(pub const $name : char = $char;)*
 
             #[allow(missing_docs)]
             #[derive(Debug, Copy, Clone, PartialEq)]
             #[non_exhaustive]
-            #[repr(C)]
             /// The `Key` enum is used to map a specific key by name e.g. `Key::Control` to an
             /// internal used unicode representation. The enum is convertible to [`std::char`] and [`slint::SharedString`](`crate::SharedString`).
             /// Use this with [`slint::platform::WindowEvent`](`crate::platform::WindowEvent`) to supply key events to Slint's platform abstraction.
             ///
+            /// # Example
+            ///
+            /// Send an tab key press event to a window
+            ///
             /// ```
-            /// let slint_key_code: char = slint::platform::Key::Tab.into();
-            /// assert_eq!(slint_key_code, '\t')
+            /// use slint::platform::{WindowEvent, Key};
+            /// fn send_tab_pressed(window: &slint::Window) {
+            ///     window.dispatch_event(WindowEvent::KeyPressed { text: Key::Tab.into() });
+            /// }
             /// ```
             pub enum Key {
                 $($name,)*
@@ -170,6 +176,7 @@ pub mod key_codes {
 pub(crate) struct InternalKeyboardModifierState {
     left_alt: bool,
     right_alt: bool,
+    altgr: bool,
     left_control: bool,
     right_control: bool,
     left_meta: bool,
@@ -185,6 +192,7 @@ impl InternalKeyboardModifierState {
         if let Some(key_code) = text.chars().next() {
             match key_code {
                 key_codes::Alt => self.left_alt = pressed,
+                key_codes::AltGr => self.altgr = pressed,
                 key_codes::Control => self.left_control = pressed,
                 key_codes::ControlR => self.right_control = pressed,
                 key_codes::Shift => self.left_shift = pressed,
@@ -193,10 +201,27 @@ impl InternalKeyboardModifierState {
                 key_codes::MetaR => self.right_meta = pressed,
                 _ => return None,
             };
+
             // Encoded keyboard modifiers must appear as individual key events. This could
             // be relaxed by implementing a string split, but right now WindowEvent::KeyPressed
             // holds only a single char.
             debug_assert_eq!(key_code.len_utf8(), text.len());
+        }
+
+        // Special cases:
+        #[cfg(target_os = "windows")]
+        {
+            if self.altgr {
+                // Windows sends Ctrl followed by AltGr on AltGr. Disable the Ctrl again!
+                self.left_control = false;
+                self.right_control = false;
+            } else if self.control() && self.alt() {
+                // Windows treats Ctrl-Alt as AltGr
+                self.left_control = false;
+                self.right_control = false;
+                self.left_alt = false;
+                self.right_alt = false;
+            }
         }
 
         Some(self)
@@ -216,25 +241,6 @@ impl InternalKeyboardModifierState {
     }
 }
 
-/// KeyboardModifier provides booleans to indicate possible modifier keys
-/// on a keyboard, such as Shift, Control, etc.
-///
-/// On macOS, the command key is mapped to the meta modifier.
-///
-/// On Windows, the windows key is mapped to the meta modifier.
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
-#[repr(C)]
-pub struct KeyboardModifiers {
-    /// Indicates the alt key on a keyboard.
-    pub alt: bool,
-    /// Indicates the control key on a keyboard.
-    pub control: bool,
-    /// Indicates the command key on macos.
-    pub meta: bool,
-    /// Indicates the shift key on a keyboard.
-    pub shift: bool,
-}
-
 impl From<InternalKeyboardModifierState> for KeyboardModifiers {
     fn from(internal_state: InternalKeyboardModifierState) -> Self {
         Self {
@@ -248,7 +254,7 @@ impl From<InternalKeyboardModifierState> for KeyboardModifiers {
 
 /// This enum defines the different kinds of key events that can happen.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
-#[repr(C)]
+#[repr(u8)]
 pub enum KeyEventType {
     /// A key on a keyboard was pressed.
     #[default]
@@ -281,36 +287,17 @@ pub struct KeyInputEvent {
     pub preedit_selection_end: usize,
 }
 
-/// Represents a key event.
-#[derive(Debug, Clone, PartialEq, Default)]
-#[repr(C)]
-pub struct KeyEvent {
-    /// The keyboard modifiers active at the time of the key press event.
-    pub modifiers: KeyboardModifiers,
-
-    /// The unicode representation of the key pressed.
-    pub text: SharedString,
-
-    // note: this field is not exported in the .slint in the KeyEvent builtin struct
-    /// Indicates whether the key was pressed or released
-    pub event_type: KeyEventType,
-
-    /// If the event type is KeyEventType::UpdateComposition, then this field specifies
-    /// the start of the selection as byte offsets within the preedit text.
-    pub preedit_selection_start: usize,
-    /// If the event type is KeyEventType::UpdateComposition, then this field specifies
-    /// the end of the selection as byte offsets within the preedit text.
-    pub preedit_selection_end: usize,
-}
-
 impl KeyEvent {
     /// If a shortcut was pressed, this function returns `Some(StandardShortcut)`.
     /// Otherwise it returns None.
     pub fn shortcut(&self) -> Option<StandardShortcut> {
         if self.modifiers.control && !self.modifiers.shift {
             match self.text.as_str() {
+                #[cfg(not(target_arch = "wasm32"))]
                 "c" => Some(StandardShortcut::Copy),
+                #[cfg(not(target_arch = "wasm32"))]
                 "x" => Some(StandardShortcut::Cut),
+                #[cfg(not(target_arch = "wasm32"))]
                 "v" => Some(StandardShortcut::Paste),
                 "a" => Some(StandardShortcut::SelectAll),
                 "f" => Some(StandardShortcut::Find),
@@ -404,15 +391,14 @@ impl KeyEvent {
             }
         }
 
-        match TextCursorDirection::try_from(keycode) {
-            Ok(direction) => return Some(TextShortcut::Move(direction)),
-            _ => (),
-        };
-
-        match keycode {
-            key_codes::Backspace => Some(TextShortcut::DeleteBackward),
-            key_codes::Delete => Some(TextShortcut::DeleteForward),
-            _ => None,
+        if let Ok(direction) = TextCursorDirection::try_from(keycode) {
+            Some(TextShortcut::Move(direction))
+        } else {
+            match keycode {
+                key_codes::Backspace => Some(TextShortcut::DeleteBackward),
+                key_codes::Delete => Some(TextShortcut::DeleteForward),
+                _ => None,
+            }
         }
     }
 }
@@ -457,7 +443,7 @@ pub enum TextShortcut {
 
 /// Represents how an item's key_event handler dealt with a key event.
 /// An accepted event results in no further event propagation.
-#[repr(C)]
+#[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum KeyEventResult {
     /// The event was handled.
@@ -468,7 +454,7 @@ pub enum KeyEventResult {
 
 /// Represents how an item's focus_event handler dealt with a focus event.
 /// An accepted event results in no further event propagation.
-#[repr(C)]
+#[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FocusEventResult {
     /// The event was handled.
@@ -480,7 +466,7 @@ pub enum FocusEventResult {
 /// This event is sent to a component and items when they receive or loose
 /// the keyboard focus.
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[repr(C)]
+#[repr(u8)]
 pub enum FocusEvent {
     /// This event is sent when an item receives the focus.
     FocusIn,
@@ -562,19 +548,21 @@ pub struct MouseInputState {
     /// true if the top item of the stack has the mouse grab
     grabbed: bool,
     delayed: Option<(crate::timers::Timer, MouseEvent)>,
+    delayed_exit_items: Vec<ItemWeak>,
 }
 
-/// Try to handle the mouse grabber. Return true if the event has handled, or false otherwise
+/// Try to handle the mouse grabber. Return None if the event has been handled, otherwise
+/// return the event that must be handled
 fn handle_mouse_grab(
-    mouse_event: &MouseEvent,
+    mouse_event: MouseEvent,
     window_adapter: &Rc<dyn WindowAdapter>,
     mouse_input_state: &mut MouseInputState,
-) -> bool {
+) -> Option<MouseEvent> {
     if !mouse_input_state.grabbed || mouse_input_state.item_stack.is_empty() {
-        return false;
+        return Some(mouse_event);
     };
 
-    let mut event = *mouse_event;
+    let mut event = mouse_event;
     let mut intercept = false;
     let mut invalid = false;
 
@@ -613,27 +601,38 @@ fn handle_mouse_grab(
         true
     });
     if invalid {
-        return false;
+        return Some(mouse_event);
     }
 
     let grabber = mouse_input_state.item_stack.last().unwrap().0.upgrade().unwrap();
     let input_result = grabber.borrow().as_ref().input_event(event, window_adapter, &grabber);
     if input_result != InputEventResult::GrabMouse {
         mouse_input_state.grabbed = false;
-        send_exit_events(mouse_input_state, mouse_event.position(), window_adapter);
+        // Return a move event so that the new position can be registered properly
+        return Some(
+            mouse_event
+                .position()
+                .map_or(MouseEvent::Exit, |position| MouseEvent::Moved { position }),
+        );
     }
 
-    true
+    None
 }
 
 fn send_exit_events(
-    mouse_input_state: &MouseInputState,
+    old_input_state: &MouseInputState,
+    new_input_state: &mut MouseInputState,
     mut pos: Option<LogicalPoint>,
     window_adapter: &Rc<dyn WindowAdapter>,
 ) {
+    for it in core::mem::take(&mut new_input_state.delayed_exit_items) {
+        let Some(item) = it.upgrade() else { continue };
+        item.borrow().as_ref().input_event(MouseEvent::Exit, window_adapter, &item);
+    }
+
     let mut clipped = false;
-    for it in mouse_input_state.item_stack.iter() {
-        let item = if let Some(item) = it.0.upgrade() { item } else { break };
+    for (idx, it) in old_input_state.item_stack.iter().enumerate() {
+        let Some(item) = it.0.upgrade() else { break };
         let g = item.geometry();
         let contains = pos.map_or(false, |p| g.contains(p));
         if let Some(p) = pos.as_mut() {
@@ -644,6 +643,13 @@ fn send_exit_events(
                 clipped = true;
             }
             item.borrow().as_ref().input_event(MouseEvent::Exit, window_adapter, &item);
+        } else if new_input_state.item_stack.get(idx).map_or(true, |(x, _)| *x != it.0) {
+            // The item is still under the mouse, but no longer in the item stack. We should also sent the exit event, unless we delay it
+            if new_input_state.delayed.is_some() {
+                new_input_state.delayed_exit_items.push(it.0.clone());
+            } else {
+                item.borrow().as_ref().input_event(MouseEvent::Exit, window_adapter, &item);
+            }
         }
     }
 }
@@ -661,18 +667,23 @@ pub fn process_mouse_input(
         mouse_input_state = process_delayed_event(window_adapter, mouse_input_state);
     }
 
-    if handle_mouse_grab(&mouse_event, window_adapter, &mut mouse_input_state) {
+    let Some(mouse_event) = handle_mouse_grab(mouse_event, window_adapter, &mut mouse_input_state)
+    else {
         return mouse_input_state;
-    }
+    };
 
     let mut result = MouseInputState::default();
     let root = ItemRc::new(component, 0);
     let r = send_mouse_event_to_item(mouse_event, root, window_adapter, &mut result, false);
-    if mouse_input_state.delayed.is_some() && !r.has_aborted() {
+    if mouse_input_state.delayed.is_some()
+        && (!r.has_aborted()
+            || Option::zip(result.item_stack.last(), mouse_input_state.item_stack.last())
+                .map_or(true, |(a, b)| a.0 != b.0))
+    {
         // Keep the delayed event
         return mouse_input_state;
     }
-    send_exit_events(&mouse_input_state, mouse_event.position(), window_adapter);
+    send_exit_events(&mouse_input_state, &mut result, mouse_event.position(), window_adapter);
 
     result
 }
@@ -703,7 +714,7 @@ pub(crate) fn process_delayed_event(
             )
         };
     vtable::new_vref!(let mut actual_visitor : VRefMut<crate::item_tree::ItemVisitorVTable> for crate::item_tree::ItemVisitor = &mut actual_visitor);
-    vtable::VRc::borrow_pin(&top_item.component()).as_ref().visit_children_item(
+    vtable::VRc::borrow_pin(top_item.component()).as_ref().visit_children_item(
         top_item.index() as isize,
         crate::item_tree::TraversalOrder::FrontToBack,
         actual_visitor,
@@ -779,7 +790,7 @@ fn send_mouse_event_to_item(
                 )
             };
         vtable::new_vref!(let mut actual_visitor : VRefMut<crate::item_tree::ItemVisitorVTable> for crate::item_tree::ItemVisitor = &mut actual_visitor);
-        let r = vtable::VRc::borrow_pin(&item_rc.component()).as_ref().visit_children_item(
+        let r = vtable::VRc::borrow_pin(item_rc.component()).as_ref().visit_children_item(
             item_rc.index() as isize,
             crate::item_tree::TraversalOrder::FrontToBack,
             actual_visitor,
@@ -803,22 +814,20 @@ fn send_mouse_event_to_item(
         item.as_ref().input_event(event, window_adapter, &item_rc)
     };
     match r {
-        InputEventResult::EventAccepted => {
-            return VisitChildrenResult::abort(item_rc.index(), 0);
-        }
+        InputEventResult::EventAccepted => VisitChildrenResult::abort(item_rc.index(), 0),
         InputEventResult::EventIgnored => {
             let _pop = result.item_stack.pop();
             debug_assert_eq!(
                 _pop.map(|x| (x.0.upgrade().unwrap().index(), x.1)).unwrap(),
                 (item_rc.index(), filter_result)
             );
-            return VisitChildrenResult::CONTINUE;
+            VisitChildrenResult::CONTINUE
         }
         InputEventResult::GrabMouse => {
             result.item_stack.last_mut().unwrap().1 =
                 InputEventFilterResult::ForwardAndInterceptGrab;
             result.grabbed = true;
-            return VisitChildrenResult::abort(item_rc.index(), 0);
+            VisitChildrenResult::abort(item_rc.index(), 0)
         }
     }
 }

@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 //! Test that all styles have the same API.
 
@@ -101,8 +101,9 @@ fn load_style(style_name: String) -> Style {
         panic!("error parsing style {}", loader.compiler_config.style.as_ref().unwrap());
     }
 
-    let doc =
-        loader.get_document(&loader.resolve_import_path(None, "std-widgets.slint").0).unwrap();
+    let doc = loader
+        .get_document(&loader.resolve_import_path(None, "std-widgets.slint").unwrap().0)
+        .unwrap();
 
     let mut style = Style::default();
 

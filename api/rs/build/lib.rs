@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 /*!
 This crate serves as a companion crate of the slint crate.
@@ -17,11 +17,11 @@ In your Cargo.toml:
 build = "build.rs"
 
 [dependencies]
-slint = "1.0.0"
+slint = "1.2.0"
 ...
 
 [build-dependencies]
-slint-build = "1.0.0"
+slint-build = "1.2.0"
 ```
 
 In the `build.rs` file:
@@ -41,7 +41,7 @@ fn main() {
 }
 ```
 */
-#![doc(html_logo_url = "https://slint-ui.com/logo/slint-logo-square-light.svg")]
+#![doc(html_logo_url = "https://slint.dev/logo/slint-logo-square-light.svg")]
 #![warn(missing_docs)]
 
 #[cfg(not(feature = "default"))]
@@ -298,6 +298,8 @@ pub fn compile_with_config(
     }
 
     let mut compiler_config = config.config;
+    compiler_config.translation_domain = std::env::var("CARGO_PKG_NAME").ok();
+
     let mut rerun_if_changed = String::new();
 
     if std::env::var_os("SLINT_STYLE").is_none() && compiler_config.style.is_none() {

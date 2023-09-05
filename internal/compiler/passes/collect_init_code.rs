@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 //! Passe that collects the code from init callbacks from elements and moves it into the component's init_code.
 
@@ -26,4 +26,7 @@ pub fn collect_init_code(component: &Rc<Component>) {
                 .push(init_callback.into_inner().expression);
         }
     });
+    for popup in component.popup_windows.borrow().iter() {
+        collect_init_code(&popup.component);
+    }
 }

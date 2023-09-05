@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 use super::{EvaluationContext, Expression, ParentCtx};
 use crate::langtype::{NativeClass, Type};
@@ -142,6 +142,53 @@ pub struct RepeatedElement {
     pub listview: Option<ListViewInfo>,
 }
 
+#[derive(Clone, Debug)]
+pub struct ComponentContainerIndex(usize);
+
+impl From<usize> for ComponentContainerIndex {
+    fn from(value: usize) -> Self {
+        assert!(value < ComponentContainerIndex::MAGIC);
+        ComponentContainerIndex(value + ComponentContainerIndex::MAGIC)
+    }
+}
+
+impl ComponentContainerIndex {
+    // Choose a MAGIC value that is big enough so we can have lots of repeaters
+    // (repeater_index must be < MAGIC), but small enough to leave room for
+    // lots of embeddings (which will use item_index + MAGIC as its
+    // repeater_index).
+    // Also pick a MAGIC that works on 32bit as well as 64bit systems.
+    const MAGIC: usize = (usize::MAX / 2) + 1;
+
+    pub fn as_item_tree_index(&self) -> usize {
+        assert!(self.0 >= ComponentContainerIndex::MAGIC);
+        self.0 - ComponentContainerIndex::MAGIC
+    }
+
+    pub fn as_repeater_index(&self) -> usize {
+        assert!(self.0 >= ComponentContainerIndex::MAGIC);
+        self.0
+    }
+
+    pub fn try_from_repeater_index(index: usize) -> Option<Self> {
+        if index >= ComponentContainerIndex::MAGIC {
+            Some(ComponentContainerIndex(index))
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ComponentContainerElement {
+    /// The item tree index of the `ComponentContainer` item node, controlling this Placeholder
+    pub component_container_item_tree_index: ComponentContainerIndex,
+    /// The index of the `ComponentContainer` item in the enclosing components `items` array
+    pub component_container_items_index: usize,
+    /// The index to a dynamic tree node where the component is supposed to be embedded at
+    pub component_placeholder_item_tree_index: usize,
+}
+
 pub struct Item {
     pub ty: Rc<NativeClass>,
     pub name: String,
@@ -183,8 +230,8 @@ impl TreeNode {
         count
     }
 
-    /// Visit this, and the children. passes
-    /// children_offset must be set to `1` for the root
+    /// Visit this, and the children.
+    /// `children_offset` must be set to `1` for the root
     pub fn visit_in_array(
         &self,
         visitor: &mut dyn FnMut(
@@ -224,6 +271,7 @@ pub struct SubComponent {
     pub functions: Vec<Function>,
     pub items: Vec<Item>,
     pub repeated: Vec<RepeatedElement>,
+    pub component_containers: Vec<ComponentContainerElement>,
     pub popup_windows: Vec<ItemTree>,
     pub sub_components: Vec<SubComponentInstance>,
     /// The initial value or binding for properties.
@@ -356,7 +404,7 @@ impl PublicComponent {
             }
             visitor(&sc.layout_info_h, ctx);
             visitor(&sc.layout_info_v, ctx);
-            for (_, e) in &sc.accessible_prop {
+            for e in sc.accessible_prop.values() {
                 visitor(e, ctx);
             }
         });

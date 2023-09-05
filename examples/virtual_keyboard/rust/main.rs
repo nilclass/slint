@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: MIT
 
 slint::include_modules!();
 
@@ -18,7 +18,6 @@ mod virtual_keyboard {
     pub fn init(app: &MainWindow) {
         let weak = app.as_weak();
         app.global::<VirtualKeyboardHandler>().on_key_pressed({
-            let weak = weak.clone();
             move |key| {
                 weak.unwrap()
                     .window()

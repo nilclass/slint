@@ -1,15 +1,18 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 use i_slint_core::api::PhysicalSize as PhysicalWindowSize;
+use i_slint_core::platform::PlatformError;
 use std::cell::RefCell;
+
+use raw_window_handle::HasRawWindowHandle;
 
 use winapi::{
     shared::{dxgi, dxgi1_2, dxgi1_3, dxgi1_4, dxgiformat},
     shared::{
         dxgitype,
         guiddef::GUID,
-        winerror::{HRESULT, S_OK},
+        winerror::{DXGI_STATUS_OCCLUDED, HRESULT, S_OK},
     },
     um::{d3d12, d3dcommon},
     Interface,
@@ -40,15 +43,15 @@ fn resolve_specific<T: Interface>(
     }
 }
 
-trait ExpectOk<T> {
-    fn expect_ok(self, msg: &str) -> T;
+trait MapToPlatformError<T> {
+    fn map_platform_error(self, msg: &str) -> Result<T, PlatformError>;
 }
 
-impl<T> ExpectOk<T> for Result<T, HRESULT> {
-    fn expect_ok(self, msg: &str) -> T {
+impl<T> MapToPlatformError<T> for Result<T, HRESULT> {
+    fn map_platform_error(self, msg: &str) -> Result<T, PlatformError> {
         match self {
-            Ok(r) => r,
-            Err(hr) => panic!("{} failed. {:x}", msg, hr),
+            Ok(r) => Ok(r),
+            Err(hr) => Err(format!("{} failed. {:x}", msg, hr).into()),
         }
     }
 }
@@ -71,10 +74,10 @@ impl SwapChain {
         command_queue: ComPtr<d3d12::ID3D12CommandQueue>,
         device: &ComPtr<d3d12::ID3D12Device>,
         mut gr_context: skia_safe::gpu::DirectContext,
-        window: &dyn raw_window_handle::HasRawWindowHandle,
+        window_handle: raw_window_handle::WindowHandle<'_>,
         size: PhysicalWindowSize,
         dxgi_factory: &ComPtr<dxgi1_4::IDXGIFactory4>,
-    ) -> Self {
+    ) -> Result<Self, PlatformError> {
         let swap_chain_desc = dxgi1_2::DXGI_SWAP_CHAIN_DESC1 {
             Width: size.width,
             Height: size.height,
@@ -86,12 +89,14 @@ impl SwapChain {
             ..Default::default()
         };
 
-        let hwnd = match window.raw_window_handle() {
+        let hwnd = match window_handle.raw_window_handle() {
             raw_window_handle::RawWindowHandle::Win32(raw_window_handle::Win32WindowHandle {
                 hwnd,
                 ..
             }) => hwnd,
-            _ => panic!("Metal surface is only supported with Win32WindowHandle"),
+            _ => {
+                return Err(format!("Metal surface is only supported with Win32WindowHandle").into())
+            }
         };
 
         let swap_chain1 = resolve_specific(|ptr| unsafe {
@@ -104,15 +109,15 @@ impl SwapChain {
                 ptr,
             )
         })
-        .expect_ok("unable to create D3D swap chain");
+        .map_platform_error("unable to create D3D swap chain")?;
 
         let swap_chain: ComPtr<dxgi1_4::IDXGISwapChain3> =
-            swap_chain1.cast().expect_ok("unable to cast swap chain 1 to v3");
+            swap_chain1.cast().map_platform_error("unable to cast swap chain 1 to v3")?;
 
         let fence = resolve_interface(|iid, ptr| unsafe {
             device.CreateFence(0, d3d12::D3D12_FENCE_FLAG_NONE, iid, ptr)
         })
-        .expect_ok("unable to create D3D12 fence");
+        .map_platform_error("unable to create D3D12 fence")?;
 
         let fence_values = [0, 0];
 
@@ -127,9 +132,9 @@ impl SwapChain {
             &mut gr_context,
             size.width as _,
             size.height as _,
-        ));
+        )?);
 
-        Self {
+        Ok(Self {
             command_queue,
             swap_chain,
             surfaces,
@@ -138,17 +143,17 @@ impl SwapChain {
             fence_event,
             fence_values,
             gr_context,
-        }
+        })
     }
 
     fn render_and_present<T>(
         &mut self,
         callback: impl FnOnce(&mut skia_safe::Surface, &mut skia_safe::gpu::DirectContext) -> T,
-    ) -> T {
+    ) -> Result<T, PlatformError> {
         let current_fence_value = self.fence_values[self.current_buffer_index];
 
         self.current_buffer_index = unsafe { self.swap_chain.GetCurrentBackBufferIndex() } as usize;
-        self.wait_for_buffer(self.current_buffer_index);
+        self.wait_for_buffer(self.current_buffer_index)?;
 
         self.fence_values[self.current_buffer_index] = current_fence_value + 1;
 
@@ -159,13 +164,11 @@ impl SwapChain {
         let info = Default::default();
         surface.flush_with_access_info(skia_safe::surface::BackendSurfaceAccess::Present, &info);
 
-        drop(surface);
-
         self.gr_context.submit(None);
 
         let present_result = unsafe { self.swap_chain.Present(1, 0) };
-        if present_result != S_OK {
-            panic!("Error presenting d3d swap chain: {:x}", present_result);
+        if present_result != S_OK && present_result != DXGI_STATUS_OCCLUDED {
+            return Err(format!("Error presenting d3d swap chain: {:x}", present_result).into());
         }
 
         let signal_result = unsafe {
@@ -173,13 +176,14 @@ impl SwapChain {
                 .Signal(self.fence.as_raw() as _, self.fence_values[self.current_buffer_index])
         };
         if signal_result != S_OK {
-            panic!(
+            return Err(format!(
                 "error setting up completion signal for d3d12 command queue: {:x}",
                 signal_result
             )
+            .into());
         }
 
-        result
+        Ok(result)
     }
 
     fn create_surfaces(
@@ -187,12 +191,12 @@ impl SwapChain {
         gr_context: &mut skia_safe::gpu::DirectContext,
         width: i32,
         height: i32,
-    ) -> [skia_safe::Surface; 2] {
+    ) -> Result<[skia_safe::Surface; 2], PlatformError> {
         let mut make_surface = |buffer_index| {
             let buffer: ComPtr<d3d12::ID3D12Resource> = resolve_interface(|iid, ptr| unsafe {
                 swap_chain.GetBuffer(buffer_index, iid, ptr)
             })
-            .expect_ok("unable to retrieve swap chain back buffer");
+            .map_err(|hr| format!("unable to retrieve swap chain back buffer: {hr}"))?;
 
             debug_assert_eq!(unsafe { buffer.GetDesc().Width }, width as u64);
             debug_assert_eq!(unsafe { buffer.GetDesc().Height }, height as u32);
@@ -210,7 +214,7 @@ impl SwapChain {
             let backend_texture =
                 skia_safe::gpu::BackendRenderTarget::new_d3d((width, height), &texture_info);
 
-            skia_safe::Surface::from_backend_render_target(
+            skia_safe::gpu::surfaces::wrap_backend_render_target(
                 gr_context,
                 &backend_texture,
                 skia_safe::gpu::SurfaceOrigin::TopLeft,
@@ -218,10 +222,10 @@ impl SwapChain {
                 None,
                 None,
             )
-            .expect("unable to create skia backend render target")
+            .ok_or_else(|| format!("unable to create d3d skia backend render target"))
         };
 
-        [make_surface(0), make_surface(1)]
+        Ok([make_surface(0)?, make_surface(1)?])
     }
 
     fn resize(
@@ -231,8 +235,8 @@ impl SwapChain {
     ) -> Result<(), i_slint_core::platform::PlatformError> {
         self.gr_context.flush_submit_and_sync_cpu();
 
-        self.wait_for_buffer(0);
-        self.wait_for_buffer(1);
+        self.wait_for_buffer(0)?;
+        self.wait_for_buffer(1)?;
 
         drop(self.surfaces.take());
 
@@ -251,20 +255,21 @@ impl SwapChain {
             &mut self.gr_context,
             width as i32,
             height as i32,
-        ));
+        )?);
         Ok(())
     }
 
-    fn wait_for_buffer(&mut self, buffer_index: usize) {
+    fn wait_for_buffer(&mut self, buffer_index: usize) -> Result<(), PlatformError> {
         if unsafe { self.fence.GetCompletedValue() } < self.fence_values[buffer_index] {
             let set_completion_result = unsafe {
                 self.fence.SetEventOnCompletion(self.fence_values[buffer_index], self.fence_event)
             };
             if set_completion_result != S_OK {
-                panic!(
+                return Err(format!(
                     "error setting event on command queue completion: {:x}",
                     set_completion_result
                 )
+                .into());
             }
             unsafe {
                 winapi::um::synchapi::WaitForSingleObjectEx(
@@ -274,19 +279,20 @@ impl SwapChain {
                 );
             }
         }
+        Ok(())
     }
 }
 
+/// This surface renders into the given window using Direct 3D. The provided display
+/// arugment is ignored, as it has no meaning on Windows.
 pub struct D3DSurface {
     swap_chain: RefCell<SwapChain>,
 }
 
 impl super::Surface for D3DSurface {
-    const SUPPORTS_GRAPHICS_API: bool = false;
-
     fn new(
-        window: &dyn raw_window_handle::HasRawWindowHandle,
-        _display: &dyn raw_window_handle::HasRawDisplayHandle,
+        window_handle: raw_window_handle::WindowHandle<'_>,
+        _display_handle: raw_window_handle::DisplayHandle<'_>,
         size: PhysicalWindowSize,
     ) -> Result<Self, i_slint_core::platform::PlatformError> {
         let factory_flags = 0;
@@ -307,7 +313,7 @@ impl super::Surface for D3DSurface {
         let dxgi_factory: ComPtr<dxgi1_4::IDXGIFactory4> = resolve_interface(|iid, ptr| unsafe {
             dxgi1_3::CreateDXGIFactory2(factory_flags, iid, ptr)
         })
-        .expect("unable to create DXGIFactory4");
+        .map_err(|hr| format!("unable to create DXGIFactory4: {hr}"))?;
 
         let mut software_adapter_index = None;
         let use_warp = std::env::var("SLINT_D3D_USE_WARP").is_ok();
@@ -363,14 +369,17 @@ impl super::Surface for D3DSurface {
             }
         };
 
-        let adapter = adapter.unwrap_or_else(|| {
-            let software_adapter_index =
-                software_adapter_index.expect("unable to locate D3D software adapter");
-            resolve_specific(|ptr| unsafe {
-                dxgi_factory.EnumAdapters1(software_adapter_index, ptr)
-            })
-            .expect("unable to create D3D software adapter")
-        });
+        let adapter = adapter.map_or_else(
+            || {
+                let software_adapter_index = software_adapter_index
+                    .ok_or_else(|| format!("unable to locate D3D software adapter"))?;
+                resolve_specific(|ptr| unsafe {
+                    dxgi_factory.EnumAdapters1(software_adapter_index, ptr)
+                })
+                .map_err(|hr| format!("unable to create D3D software adapter: {hr}"))
+            },
+            |adapter| Ok(adapter),
+        )?;
 
         let device: ComPtr<d3d12::ID3D12Device> = resolve_interface(|iid, ptr| unsafe {
             d3d12::D3D12CreateDevice(
@@ -380,7 +389,7 @@ impl super::Surface for D3DSurface {
                 ptr,
             )
         })
-        .expect_ok("error calling D3D12CreateDevice");
+        .map_platform_error("error calling D3D12CreateDevice")?;
 
         let queue: ComPtr<d3d12::ID3D12CommandQueue> = {
             let desc = d3d12::D3D12_COMMAND_QUEUE_DESC {
@@ -391,7 +400,7 @@ impl super::Surface for D3DSurface {
             };
 
             resolve_interface(|iid, ptr| unsafe { device.CreateCommandQueue(&desc, iid, ptr) })
-                .expect("Creating command queue")
+                .map_platform_error("Creating command queue")?
         };
 
         let backend_context = skia_safe::gpu::d3d::BackendContext {
@@ -403,20 +412,22 @@ impl super::Surface for D3DSurface {
         };
 
         let gr_context = unsafe { skia_safe::gpu::DirectContext::new_d3d(&backend_context, None) }
-            .expect("unable to create Skia D3D DirectContext");
+            .ok_or_else(|| format!("unable to create Skia D3D DirectContext"))?;
 
-        let swap_chain =
-            RefCell::new(SwapChain::new(queue, &device, gr_context, &window, size, &dxgi_factory));
+        let swap_chain = RefCell::new(SwapChain::new(
+            queue,
+            &device,
+            gr_context,
+            window_handle,
+            size,
+            &dxgi_factory,
+        )?);
 
         Ok(Self { swap_chain })
     }
 
     fn name(&self) -> &'static str {
         "d3d"
-    }
-
-    fn with_graphics_api(&self, _cb: impl FnOnce(i_slint_core::api::GraphicsAPI<'_>)) {
-        unimplemented!()
     }
 
     fn resize_event(
@@ -429,12 +440,11 @@ impl super::Surface for D3DSurface {
     fn render(
         &self,
         _size: PhysicalWindowSize,
-        callback: impl FnOnce(&mut skia_safe::Canvas, &mut skia_safe::gpu::DirectContext),
+        callback: &dyn Fn(&mut skia_safe::Canvas, &mut skia_safe::gpu::DirectContext),
     ) -> Result<(), i_slint_core::platform::PlatformError> {
         self.swap_chain
             .borrow_mut()
-            .render_and_present(|surface, gr_context| callback(surface.canvas(), gr_context));
-        Ok(())
+            .render_and_present(|surface, gr_context| callback(surface.canvas(), gr_context))
     }
 
     fn bits_per_pixel(&self) -> Result<u8, i_slint_core::platform::PlatformError> {

@@ -1,10 +1,10 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 // cSpell: ignore deinit fnbox qsize
 
 #![doc = include_str!("README.md")]
-#![doc(html_logo_url = "https://slint-ui.com/logo/slint-logo-square-light.svg")]
+#![doc(html_logo_url = "https://slint.dev/logo/slint-logo-square-light.svg")]
 #![recursion_limit = "2048"]
 
 extern crate alloc;
@@ -21,21 +21,6 @@ mod qt_window;
 
 mod accessible_generated;
 mod key_generated;
-
-#[doc(hidden)]
-#[cold]
-#[cfg(not(target_arch = "wasm32"))]
-pub fn use_modules() -> usize {
-    #[cfg(no_qt)]
-    {
-        ffi::slint_qt_get_widget as usize
-    }
-    #[cfg(not(no_qt))]
-    {
-        qt_window::ffi::slint_qt_get_widget as usize
-            + (&qt_widgets::NativeButtonVTable) as *const _ as usize
-    }
-}
 
 #[cfg(no_qt)]
 mod ffi {
@@ -73,6 +58,7 @@ pub type NativeWidgets =
     (qt_widgets::NativeButton,
     (qt_widgets::NativeCheckBox,
     (qt_widgets::NativeSlider,
+    (qt_widgets::NativeProgressIndicator,
     (qt_widgets::NativeSpinBox,
     (qt_widgets::NativeGroupBox,
     (qt_widgets::NativeLineEdit,
@@ -83,7 +69,7 @@ pub type NativeWidgets =
     (qt_widgets::NativeComboBoxPopup,
     (qt_widgets::NativeTabWidget,
     (qt_widgets::NativeTab,
-            ())))))))))))));
+            ()))))))))))))));
 
 #[cfg(not(no_qt))]
 #[rustfmt::skip]
@@ -127,6 +113,22 @@ pub type NativeGlobals = ();
 pub const HAS_NATIVE_STYLE: bool = cfg!(not(no_qt));
 
 pub struct Backend;
+
+impl Backend {
+    pub fn new() -> Self {
+        #[cfg(not(no_qt))]
+        {
+            use cpp::cpp;
+            // Initialize QApplication early for High-DPI support on Windows,
+            // before the first calls to QStyle.
+            cpp! {unsafe[] {
+                ensure_initialized(true);
+            }}
+        }
+        Self {}
+    }
+}
+
 impl i_slint_core::platform::Platform for Backend {
     fn create_window_adapter(
         &self,
@@ -161,8 +163,8 @@ impl i_slint_core::platform::Platform for Backend {
                 ensure_initialized(true);
                 qApp->exec();
             } }
-            return Ok(());
-        };
+            Ok(())
+        }
         #[cfg(no_qt)]
         Err("Qt platform requested but Slint is compiled without Qt support".into())
     }

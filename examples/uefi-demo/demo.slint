@@ -1,10 +1,12 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: MIT
 
 import {
     AboutSlint, Button, GridBox, HorizontalBox, LineEdit, Slider,
     StandardButton, StandardListView, TabWidget, VerticalBox
 } from "std-widgets.slint";
+
+import "../printerdemo/ui/fonts/NotoSans-Regular.ttf";
 
 export component Demo inherits Window {
     in property <string> firmware-vendor;

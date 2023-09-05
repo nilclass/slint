@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 use std::{cell::RefCell, num::NonZeroU32};
 
@@ -12,7 +12,9 @@ use glutin::{
 };
 use i_slint_core::api::PhysicalSize as PhysicalWindowSize;
 use i_slint_core::{api::GraphicsAPI, platform::PlatformError};
+use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 
+/// This surface type renders into the given window with OpenGL, using glutin and glow libraries.
 pub struct OpenGLSurface {
     fb_info: skia_safe::gpu::gl::FramebufferInfo,
     surface: RefCell<skia_safe::Surface>,
@@ -22,11 +24,9 @@ pub struct OpenGLSurface {
 }
 
 impl super::Surface for OpenGLSurface {
-    const SUPPORTS_GRAPHICS_API: bool = true;
-
     fn new(
-        window: &dyn raw_window_handle::HasRawWindowHandle,
-        display: &dyn raw_window_handle::HasRawDisplayHandle,
+        window_handle: raw_window_handle::WindowHandle<'_>,
+        display_handle: raw_window_handle::DisplayHandle<'_>,
         size: PhysicalWindowSize,
     ) -> Result<Self, PlatformError> {
         let width: std::num::NonZeroU32 = size.width.try_into().map_err(|_| {
@@ -37,7 +37,7 @@ impl super::Surface for OpenGLSurface {
         })?;
 
         let (current_glutin_context, glutin_surface) =
-            Self::init_glutin(window, display, width, height)?;
+            Self::init_glutin(window_handle, display_handle, width, height)?;
 
         let fb_info = {
             use glow::HasContext;
@@ -54,6 +54,7 @@ impl super::Surface for OpenGLSurface {
                     format!("Skia Renderer: Internal error, framebuffer binding returned signed id")
                 })?,
                 format: skia_safe::gpu::gl::Format::RGBA8.into(),
+                ..Default::default()
             }
         };
 
@@ -97,7 +98,11 @@ impl super::Surface for OpenGLSurface {
         "opengl"
     }
 
-    fn with_graphics_api(&self, callback: impl FnOnce(GraphicsAPI<'_>)) {
+    fn supports_graphics_api(&self) -> bool {
+        true
+    }
+
+    fn with_graphics_api(&self, callback: &mut dyn FnMut(GraphicsAPI<'_>)) {
         let api = GraphicsAPI::NativeOpenGL {
             get_proc_address: &|name| {
                 self.glutin_context.display().get_proc_address(name) as *const _
@@ -106,7 +111,7 @@ impl super::Surface for OpenGLSurface {
         callback(api)
     }
 
-    fn with_active_surface(&self, callback: impl FnOnce()) -> Result<(), PlatformError> {
+    fn with_active_surface(&self, callback: &mut dyn FnMut()) -> Result<(), PlatformError> {
         self.ensure_context_current()?;
         callback();
         Ok(())
@@ -115,7 +120,7 @@ impl super::Surface for OpenGLSurface {
     fn render(
         &self,
         size: PhysicalWindowSize,
-        callback: impl FnOnce(&mut skia_safe::Canvas, &mut skia_safe::gpu::DirectContext),
+        callback: &dyn Fn(&mut skia_safe::Canvas, &mut skia_safe::gpu::DirectContext),
     ) -> Result<(), PlatformError> {
         self.ensure_context_current()?;
 
@@ -188,8 +193,8 @@ impl super::Surface for OpenGLSurface {
 
 impl OpenGLSurface {
     fn init_glutin(
-        _window: &dyn raw_window_handle::HasRawWindowHandle,
-        _display: &dyn raw_window_handle::HasRawDisplayHandle,
+        _window_handle: raw_window_handle::WindowHandle<'_>,
+        _display_handle: raw_window_handle::DisplayHandle<'_>,
         width: NonZeroU32,
         height: NonZeroU32,
     ) -> Result<
@@ -202,12 +207,16 @@ impl OpenGLSurface {
         cfg_if::cfg_if! {
             if #[cfg(target_os = "macos")] {
                 let prefs = [glutin::display::DisplayApiPreference::Cgl];
-            } else if #[cfg(all(feature = "x11", not(target_family = "windows")))] {
-                let prefs = [glutin::display::DisplayApiPreference::Egl, glutin::display::DisplayApiPreference::Glx(Box::new(winit::platform::x11::register_xlib_error_hook))];
+            } else if #[cfg(all(feature = "x11", not(target_family = "windows"), not(target_os = "android")))] {
+                let mut prefs = vec![glutin::display::DisplayApiPreference::Egl];
+                // GLX can only be supported with xlib, not xcb.
+                if matches!(_window_handle.raw_window_handle(), raw_window_handle::RawWindowHandle::Xlib(..)) {
+                    prefs.push(glutin::display::DisplayApiPreference::Glx(Box::new(winit::platform::x11::register_xlib_error_hook)));
+                }
             } else if #[cfg(not(target_family = "windows"))] {
                 let prefs = [glutin::display::DisplayApiPreference::Egl];
             } else {
-                let prefs = [glutin::display::DisplayApiPreference::EglThenWgl(Some(_window.raw_window_handle()))];
+                let prefs = [glutin::display::DisplayApiPreference::EglThenWgl(Some(_window_handle.raw_window_handle()))];
             }
         }
 
@@ -215,9 +224,16 @@ impl OpenGLSurface {
             |display_api_preference| -> Result<(_, _), Box<dyn std::error::Error>> {
                 let gl_display = unsafe {
                     glutin::display::Display::new(
-                        _display.raw_display_handle(),
+                        _display_handle.raw_display_handle(),
                         display_api_preference,
-                    )?
+                    )
+                    .map_err(|glutin_error| {
+                        format!(
+                            "Error creating glutin display for native display {:#?}: {}",
+                            _display_handle.raw_display_handle(),
+                            glutin_error
+                        )
+                    })?
                 };
 
                 let config_template_builder = glutin::config::ConfigTemplateBuilder::new();
@@ -234,7 +250,7 @@ impl OpenGLSurface {
                 // Upstream advises to use this only on Windows.
                 #[cfg(target_family = "windows")]
                 let config_template_builder = config_template_builder
-                    .compatible_with_native_window(_window.raw_window_handle());
+                    .compatible_with_native_window(_window_handle.raw_window_handle());
 
                 let config_template = config_template_builder.build();
 
@@ -260,10 +276,10 @@ impl OpenGLSurface {
                         major: 2,
                         minor: 0,
                     })))
-                    .build(Some(_window.raw_window_handle()));
+                    .build(Some(_window_handle.raw_window_handle()));
 
                 let fallback_context_attributes =
-                    ContextAttributesBuilder::new().build(Some(_window.raw_window_handle()));
+                    ContextAttributesBuilder::new().build(Some(_window_handle.raw_window_handle()));
 
                 let not_current_gl_context = unsafe {
                     gl_display.create_context(&config, &gles_context_attributes).or_else(|_| {
@@ -272,7 +288,7 @@ impl OpenGLSurface {
                 };
 
                 let attrs = SurfaceAttributesBuilder::<WindowSurface>::new().build(
-                    _window.raw_window_handle(),
+                    _window_handle.raw_window_handle(),
                     width,
                     height,
                 );
@@ -307,7 +323,7 @@ impl OpenGLSurface {
         if let raw_window_handle::RawWindowHandle::AppKit(raw_window_handle::AppKitWindowHandle {
             ns_view,
             ..
-        }) = _window.raw_window_handle()
+        }) = _window_handle.raw_window_handle()
         {
             use cocoa::appkit::NSView;
             let view_id: cocoa::base::id = ns_view as *const _ as *mut _;
@@ -321,6 +337,18 @@ impl OpenGLSurface {
                 format!("FemtoVG Renderer: Failed to make newly created OpenGL context current: {glutin_error}")
                 .into()
         })?;
+
+        // Sanity check, as all this might succeed on Windows without working GL drivers, but this will fail:
+        if context
+            .display()
+            .get_proc_address(&std::ffi::CString::new("glCreateShader").unwrap())
+            .is_null()
+        {
+            return Err(format!(
+                "Failed to initialize OpenGL driver: Could not locate glCreateShader symbol"
+            )
+            .into());
+        }
 
         Ok((context, surface))
     }
@@ -340,7 +368,7 @@ impl OpenGLSurface {
             config.stencil_size() as _,
             fb_info,
         );
-        match skia_safe::Surface::from_backend_render_target(
+        match skia_safe::gpu::surfaces::wrap_backend_render_target(
             gr_context,
             &backend_render_target,
             skia_safe::gpu::SurfaceOrigin::BottomLeft,
@@ -371,6 +399,11 @@ impl OpenGLSurface {
 impl Drop for OpenGLSurface {
     fn drop(&mut self) {
         // Make sure that the context is current before Skia calls glDelete***
-        self.ensure_context_current().expect("Skia OpenGL Renderer: Failed to make OpenGL context current before deleting graphics resources");
+        // In the event that this fails for some reason (lost GL context), convey that to Skia so that it doesn't try to call
+        // glDelete***
+        if self.ensure_context_current().is_err() {
+            i_slint_core::debug_log!("Skia OpenGL Renderer warning: Failed to make context current for destruction - considering context abandoned.");
+            self.gr_context.borrow_mut().abandon();
+        }
     }
 }

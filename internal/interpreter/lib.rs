@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 /*!
 # Slint interpreter library
@@ -40,6 +40,7 @@ if let Some(definition) = definition {
 This example load a `.slint` from a string and set some properties:
 
 ```rust
+# i_slint_backend_testing::init();
 use slint_interpreter::{ComponentDefinition, ComponentCompiler, Value, SharedString, ComponentHandle};
 
 let code = r#"
@@ -64,11 +65,11 @@ instance.run().unwrap();
 //! ## Feature flags
 #![cfg_attr(feature = "document-features", doc = document_features::document_features!())]
 #![warn(missing_docs)]
-#![doc(html_logo_url = "https://slint-ui.com/logo/slint-logo-square-light.svg")]
+#![doc(html_logo_url = "https://slint.dev/logo/slint-logo-square-light.svg")]
 
-#[cfg(not(feature = "compat-1-0"))]
+#[cfg(not(feature = "compat-1-2"))]
 compile_error!(
-    "The feature `compat-1-0` must be enabled to ensure \
+    "The feature `compat-1-2` must be enabled to ensure \
     forward compatibility with future version of this crate"
 );
 
@@ -88,16 +89,6 @@ pub use api::*;
 /// (Re-export from corelib.)
 #[doc(inline)]
 pub use i_slint_core::{Brush, Color, SharedString, SharedVector};
-
-/// One need to use at least one function in each module in order to get them
-/// exported in the final binary.
-/// This only use functions from modules which are not otherwise used.
-#[doc(hidden)]
-#[cold]
-#[cfg(feature = "ffi")]
-pub fn use_modules() -> usize {
-    crate::api::ffi::slint_interpreter_value_new as usize
-}
 
 #[cfg(test)]
 mod tests;

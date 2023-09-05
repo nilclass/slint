@@ -1,3 +1,4 @@
+<!-- Copyright © SixtyFPS GmbH <info@slint.dev> ; SPDX-License-Identifier: MIT -->
 # Introduction
 
 This tutorial will introduce you to the Slint UI framework in a playful way by implementing a little memory game. We're going to combine the `.slint` language for the graphics with the game rules implemented in Rust.
@@ -10,5 +11,5 @@ If you uncover two tiles with the same icon, then they remain visible - they're 
 
 This is how the game looks like in action:
 
-<video autoplay loop muted playsinline src="https://slint-ui.com/blog/memory-game-tutorial/memory_clip.mp4"
+<video autoplay loop muted playsinline src="https://slint.dev/blog/memory-game-tutorial/memory_clip.mp4"
         class="img-fluid img-thumbnail rounded"></video>

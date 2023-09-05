@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 use std::borrow::Cow;
 
@@ -9,7 +9,7 @@ pub struct VirtualFile {
     pub builtin_contents: Option<&'static [u8]>,
 }
 
-impl<'a> VirtualFile {
+impl VirtualFile {
     pub fn read(&self) -> Cow<'static, [u8]> {
         match self.builtin_contents {
             Some(static_data) => Cow::Borrowed(static_data),
@@ -26,7 +26,7 @@ pub fn styles() -> Vec<&'static str> {
     builtin_library::styles()
 }
 
-pub fn load_file<'a>(path: &'a std::path::Path) -> Option<VirtualFile> {
+pub fn load_file(path: &std::path::Path) -> Option<VirtualFile> {
     match path.strip_prefix("builtin:/") {
         Ok(builtin_path) => builtin_library::load_builtin_file(builtin_path),
         Err(_) => path.exists().then(|| VirtualFile {

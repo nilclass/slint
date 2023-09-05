@@ -1,15 +1,15 @@
-# Copyright © SixtyFPS GmbH <info@slint-ui.com>
-# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+# Copyright © SixtyFPS GmbH <info@slint.dev>
+# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 [package]
 name = "i-slint-backend-winit"
-version = "1.0.3"
-authors = ["Slint Developers <info@slint-ui.com>"]
+version = "1.2.0"
+authors = ["Slint Developers <info@slint.dev>"]
 edition = "2021"
-license = "GPL-3.0-only OR LicenseRef-Slint-commercial"
+license = "GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial"
 description = "OpenGL rendering backend for Slint"
 repository = "https://github.com/slint-ui/slint"
-homepage = "https://slint-ui.com"
+homepage = "https://slint.dev"
 build = "build.rs"
 rust-version.workspace = true
 
@@ -21,17 +21,18 @@ path = "lib.rs"
 [features]
 wayland = ["winit/wayland", "winit/wayland-csd-adwaita", "glutin/wayland", "glutin-winit/wayland", "copypasta/wayland", "i-slint-renderer-skia?/wayland"]
 x11 = ["winit/x11", "glutin/x11", "glutin/glx", "glutin-winit/x11", "glutin-winit/glx", "copypasta/x11", "i-slint-renderer-skia?/x11"]
-renderer-winit-femtovg = ["i-slint-renderer-femtovg"]
-renderer-winit-skia = ["i-slint-renderer-skia"]
-renderer-winit-skia-opengl = ["renderer-winit-skia", "i-slint-renderer-skia/opengl"]
-renderer-winit-software = ["softbuffer", "imgref", "rgb", "i-slint-core/software-renderer-systemfonts"]
-rtti = ["i-slint-core/rtti"]
+renderer-femtovg = ["i-slint-renderer-femtovg"]
+renderer-skia = ["i-slint-renderer-skia"]
+renderer-skia-opengl = ["renderer-skia", "i-slint-renderer-skia/opengl"]
+renderer-skia-vulkan = ["renderer-skia", "i-slint-renderer-skia/vulkan"]
+renderer-software = ["softbuffer", "imgref", "rgb", "i-slint-core/software-renderer-systemfonts"]
+accessibility = ["accesskit", "accesskit_winit"]
 default = []
 
 [dependencies]
-i-slint-core = { version = "=1.0.3", path = "../../../internal/core" }
-i-slint-core-macros = { version = "=1.0.3", path = "../../../internal/core-macros" }
-i-slint-common = { version = "=1.0.3", path = "../../../internal/common" }
+i-slint-core = { version = "=1.2.0", path = "../../../internal/core" }
+i-slint-core-macros = { version = "=1.2.0", path = "../../../internal/core-macros" }
+i-slint-common = { version = "=1.2.0", path = "../../../internal/common" }
 
 const-field-offset = { version = "0.1", path = "../../../helper_crates/const-field-offset" }
 vtable = { version = "0.1.6", path = "../../../helper_crates/vtable" }
@@ -44,34 +45,32 @@ once_cell = "1.5"
 pin-weak = "1"
 scoped-tls-hkt = "0.1"
 # Pinned due to https://github.com/slint-ui/slint/issues/2424
-winit = { version = "=0.28.5", default-features = false }
+winit = { version = "=0.28.6", default-features = false }
 instant = "0.1"
 raw-window-handle = { version = "0.5", features = ["alloc"] }
 scopeguard =  { version = "1.1.0", default-features = false }
+send_wrapper = { workspace = true }
 
 # For the FemtoVG renderer
-i-slint-renderer-femtovg = { version = "=1.0.3", path = "../../renderers/femtovg", optional = true }
+i-slint-renderer-femtovg = { version = "=1.2.0", path = "../../renderers/femtovg", optional = true }
 
 # For the Skia renderer
-i-slint-renderer-skia = { version = "=1.0.3", path = "../../renderers/skia", optional = true }
+i-slint-renderer-skia = { version = "=1.2.0", path = "../../renderers/skia", optional = true }
 
 # For the software renderer
-softbuffer = { version = "0.2.0", optional = true }
+softbuffer = { version = "0.3.0", optional = true }
 imgref = { version = "1.6.1", optional = true }
 rgb = { version = "0.8.27", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-web-sys = { version = "0.3", features=["HtmlInputElement", "HtmlCanvasElement", "Window", "Document", "Event", "KeyboardEvent", "InputEvent", "CompositionEvent", "DomStringMap"] }
+web-sys = { version = "0.3", features=["HtmlInputElement", "HtmlCanvasElement", "Window", "Document", "Event", "KeyboardEvent", "InputEvent", "CompositionEvent", "DomStringMap", "ClipboardEvent", "DataTransfer"] }
 wasm-bindgen = { version = "0.2" }
-send_wrapper = "0.6.0"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 glutin = { version = "0.30", optional = true, default-features = false, features = ["egl", "wgl"] }
 glutin-winit = { version = "0.3.0", optional = true, default-features = false, features = ["egl", "wgl"] }
-i-slint-renderer-femtovg = { version = "=1.0.3", path = "../../renderers/femtovg", optional = true, features = ["diskfonts"] }
-
-[target.'cfg(not(any(target_family = "windows", target_os = "macos", target_os = "ios", target_arch = "wasm32")))'.dependencies]
-i-slint-renderer-femtovg = { version = "=1.0.3", path = "../../renderers/femtovg", optional = true, features = ["fontconfig"] }
+accesskit = { version = "0.11.0", optional = true }
+accesskit_winit = { version = "0.14.0", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # For GL rendering
@@ -81,13 +80,7 @@ cocoa = { version = "0.24.0" }
 cfg_aliases = "0.1.0"
 
 [dev-dependencies]
-slint = { path = "../../../api/rs/slint", default-features = false, features = ["std", "compat-1-0", "backend-winit", "renderer-winit-software"] }
+slint = { path = "../../../api/rs/slint", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-software"] }
 
 [package.metadata.docs.rs]
-rustdoc-args = [
-  "--html-in-header",
-  "docs/resources/slint-docs-preview.html",
-  "--html-in-header",
-  "docs/resources/slint-docs-highlight.html",
-]
-features = ["wayland", "renderer-winit-software"]
+features = ["wayland", "renderer-software"]

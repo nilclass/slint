@@ -1,5 +1,11 @@
+<!-- Copyright © SixtyFPS GmbH <info@slint.dev> ; SPDX-License-Identifier: MIT OR Apache-2.0 -->
+
 # Changelog
 All notable changes to this crate will be documented in this file.
+
+## [0.1.11] - 2022-09-04
+
+ - Use portable_atomic instead of deprecated atomic_polyfill.
 
 ## [0.1.10] - 2022-04-03
 

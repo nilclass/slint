@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 // cSpell: ignore combobox groupbox lineedit listviewitem scrollview spinbox stylemetrics
 
@@ -50,6 +50,7 @@ fn main() {
     println!("cargo:rerun-if-changed=qt_widgets/listviewitem.rs");
     println!("cargo:rerun-if-changed=qt_widgets/scrollview.rs");
     println!("cargo:rerun-if-changed=qt_widgets/slider.rs");
+    println!("cargo:rerun-if-changed=qt_widgets/progress_indicator.rs");
     println!("cargo:rerun-if-changed=qt_widgets/spinbox.rs");
     println!("cargo:rerun-if-changed=qt_widgets/stylemetrics.rs");
     println!("cargo:rerun-if-changed=qt_widgets/tabwidget.rs");

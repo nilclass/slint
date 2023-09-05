@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 use crate::diagnostics::{BuildDiagnostics, SourceLocation, Spanned};
 use crate::langtype::{BuiltinElement, EnumerationValue, Type};
@@ -16,7 +16,7 @@ use std::rc::{Rc, Weak};
 pub use crate::namedreference::NamedReference;
 pub use crate::passes::resolving;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 /// A function built into the run-time
 pub enum BuiltinFunction {
     GetWindowScaleFactor,
@@ -39,12 +39,18 @@ pub enum BuiltinFunction {
     Pow,
     SetFocusItem,
     ShowPopupWindow,
+    ClosePopupWindow,
+    /// A function that belongs to an item (such as TextInput's select-all function).
+    ItemMemberFunction(String),
     /// the "42".to_float()
     StringToFloat,
     /// the "42".is_float()
     StringIsFloat,
     ColorBrighter,
     ColorDarker,
+    ColorTransparentize,
+    ColorMix,
+    ColorWithAlpha,
     ImageSize,
     ArrayLength,
     Rgb,
@@ -52,9 +58,11 @@ pub enum BuiltinFunction {
     TextInputFocused,
     SetTextInputFocused,
     ImplicitLayoutInfo(Orientation),
+    ItemAbsolutePosition,
     RegisterCustomFontByPath,
     RegisterCustomFontByMemory,
     RegisterBitmapFont,
+    Translate,
 }
 
 #[derive(Debug, Clone)]
@@ -118,7 +126,13 @@ impl BuiltinFunction {
                 return_type: Box::new(Type::Void),
                 args: vec![Type::ElementReference],
             },
-            BuiltinFunction::ShowPopupWindow => Type::Function {
+            BuiltinFunction::ShowPopupWindow | BuiltinFunction::ClosePopupWindow => {
+                Type::Function {
+                    return_type: Box::new(Type::Void),
+                    args: vec![Type::ElementReference],
+                }
+            }
+            BuiltinFunction::ItemMemberFunction(..) => Type::Function {
                 return_type: Box::new(Type::Void),
                 args: vec![Type::ElementReference],
             },
@@ -140,6 +154,18 @@ impl BuiltinFunction {
                 return_type: Box::new(Type::Brush),
                 args: vec![Type::Brush, Type::Float32],
             },
+            BuiltinFunction::ColorTransparentize => Type::Function {
+                return_type: Box::new(Type::Brush),
+                args: vec![Type::Brush, Type::Float32],
+            },
+            BuiltinFunction::ColorMix => Type::Function {
+                return_type: Box::new(Type::Color),
+                args: vec![Type::Color, Type::Color, Type::Float32],
+            },
+            BuiltinFunction::ColorWithAlpha => Type::Function {
+                return_type: Box::new(Type::Brush),
+                args: vec![Type::Brush, Type::Float32],
+            },
             BuiltinFunction::ImageSize => Type::Function {
                 return_type: Box::new(Type::Struct {
                     fields: IntoIterator::into_iter([
@@ -149,6 +175,7 @@ impl BuiltinFunction {
                     .collect(),
                     name: Some("Size".to_string()),
                     node: None,
+                    rust_attributes: None,
                 }),
                 args: vec![Type::Image],
             },
@@ -168,6 +195,10 @@ impl BuiltinFunction {
             BuiltinFunction::SetTextInputFocused => {
                 Type::Function { return_type: Box::new(Type::Void), args: vec![Type::Bool] }
             }
+            BuiltinFunction::ItemAbsolutePosition => Type::Function {
+                return_type: Box::new(crate::typeregister::logical_point_type()),
+                args: vec![Type::ElementReference],
+            },
             BuiltinFunction::RegisterCustomFontByPath => {
                 Type::Function { return_type: Box::new(Type::Void), args: vec![Type::String] }
             }
@@ -177,6 +208,16 @@ impl BuiltinFunction {
             BuiltinFunction::RegisterBitmapFont => {
                 Type::Function { return_type: Box::new(Type::Void), args: vec![Type::Int32] }
             }
+            BuiltinFunction::Translate => Type::Function {
+                return_type: Box::new(Type::String),
+                // original, context, domain, args
+                args: vec![
+                    Type::String,
+                    Type::String,
+                    Type::String,
+                    Type::Array(Type::String.into()),
+                ],
+            },
         }
     }
 
@@ -204,9 +245,14 @@ impl BuiltinFunction {
             | BuiltinFunction::Pow
             | BuiltinFunction::ATan => true,
             BuiltinFunction::SetFocusItem => false,
-            BuiltinFunction::ShowPopupWindow => false,
+            BuiltinFunction::ShowPopupWindow | BuiltinFunction::ClosePopupWindow => false,
+            BuiltinFunction::ItemMemberFunction(..) => false,
             BuiltinFunction::StringToFloat | BuiltinFunction::StringIsFloat => true,
-            BuiltinFunction::ColorBrighter | BuiltinFunction::ColorDarker => true,
+            BuiltinFunction::ColorBrighter
+            | BuiltinFunction::ColorDarker
+            | BuiltinFunction::ColorTransparentize
+            | BuiltinFunction::ColorMix
+            | BuiltinFunction::ColorWithAlpha => true,
             // ImageSize is pure, except when loading images via the network. Then the initial size will be 0/0 and
             // we need to make sure that calls to this function stay within a binding, so that the property
             // notification when updating kicks in. Only Slintpad (wasm-interpreter) loads images via the network,
@@ -220,9 +266,11 @@ impl BuiltinFunction {
             BuiltinFunction::SetTextInputFocused => false,
             BuiltinFunction::TextInputFocused => false,
             BuiltinFunction::ImplicitLayoutInfo(_) => false,
+            BuiltinFunction::ItemAbsolutePosition => true,
             BuiltinFunction::RegisterCustomFontByPath
             | BuiltinFunction::RegisterCustomFontByMemory
             | BuiltinFunction::RegisterBitmapFont => false,
+            BuiltinFunction::Translate => false,
         }
     }
 
@@ -250,18 +298,25 @@ impl BuiltinFunction {
             | BuiltinFunction::Pow
             | BuiltinFunction::ATan => true,
             BuiltinFunction::SetFocusItem => false,
-            BuiltinFunction::ShowPopupWindow => false,
+            BuiltinFunction::ShowPopupWindow | BuiltinFunction::ClosePopupWindow => false,
+            BuiltinFunction::ItemMemberFunction(..) => false,
             BuiltinFunction::StringToFloat | BuiltinFunction::StringIsFloat => true,
-            BuiltinFunction::ColorBrighter | BuiltinFunction::ColorDarker => true,
+            BuiltinFunction::ColorBrighter
+            | BuiltinFunction::ColorDarker
+            | BuiltinFunction::ColorTransparentize
+            | BuiltinFunction::ColorMix
+            | BuiltinFunction::ColorWithAlpha => true,
             BuiltinFunction::ImageSize => true,
             BuiltinFunction::ArrayLength => true,
             BuiltinFunction::Rgb => true,
             BuiltinFunction::ImplicitLayoutInfo(_) => true,
+            BuiltinFunction::ItemAbsolutePosition => true,
             BuiltinFunction::SetTextInputFocused => false,
             BuiltinFunction::TextInputFocused => true,
             BuiltinFunction::RegisterCustomFontByPath
             | BuiltinFunction::RegisterCustomFontByMemory
             | BuiltinFunction::RegisterBitmapFont => false,
+            BuiltinFunction::Translate => true,
         }
     }
 }
@@ -286,7 +341,7 @@ pub fn operator_class(op: char) -> OperatorClass {
 macro_rules! declare_units {
     ($( $(#[$m:meta])* $ident:ident = $string:literal -> $ty:ident $(* $factor:expr)? ,)*) => {
         /// The units that can be used after numbers in the language
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, strum::EnumIter)]
         pub enum Unit {
             $($(#[$m])* $ident,)*
         }
@@ -372,6 +427,12 @@ impl Default for Unit {
     fn default() -> Self {
         Self::None
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum MinMaxOp {
+    Min,
+    Max,
 }
 
 /// The Expression is hold by properties, so it should not hold any strong references to node from the object_tree
@@ -557,6 +618,13 @@ pub enum Expression {
     /// The orientation is the orientation of the cache, not the orientation of the layout
     ComputeLayoutInfo(crate::layout::Layout, crate::layout::Orientation),
     SolveLayout(crate::layout::Layout, crate::layout::Orientation),
+
+    MinMax {
+        ty: Type,
+        op: MinMaxOp,
+        lhs: Box<Expression>,
+        rhs: Box<Expression>,
+    },
 }
 
 impl Expression {
@@ -576,24 +644,13 @@ impl Expression {
             Expression::BuiltinMacroReference { .. } => Type::Invalid, // We don't know the type
             Expression::ElementReference(_) => Type::ElementReference,
             Expression::RepeaterIndexReference { .. } => Type::Int32,
-            Expression::RepeaterModelReference { element } => {
-                if let Expression::Cast { from, .. } = element
-                    .upgrade()
-                    .unwrap()
-                    .borrow()
-                    .repeated
-                    .as_ref()
-                    .map_or(&Expression::Invalid, |e| &e.model)
-                {
-                    match from.ty() {
-                        Type::Float32 | Type::Int32 => Type::Int32,
-                        Type::Array(elem) => *elem,
-                        _ => Type::Invalid,
-                    }
-                } else {
-                    Type::Invalid
-                }
-            }
+            Expression::RepeaterModelReference { element } => element
+                .upgrade()
+                .unwrap()
+                .borrow()
+                .repeated
+                .as_ref()
+                .map_or(Type::Invalid, |e| model_inner_type(&e.model)),
             Expression::FunctionParameterReference { ty, .. } => ty.clone(),
             Expression::StructFieldAccess { base, name } => match base.ty() {
                 Type::Struct { fields, .. } => {
@@ -694,6 +751,7 @@ impl Expression {
             Expression::LayoutCacheAccess { .. } => Type::LogicalLength,
             Expression::ComputeLayoutInfo(..) => crate::layout::layout_info_type(),
             Expression::SolveLayout(..) => Type::LayoutCache,
+            Expression::MinMax { ty, .. } => ty.clone(),
         }
     }
 
@@ -711,41 +769,41 @@ impl Expression {
             Expression::FunctionParameterReference { .. } => {}
             Expression::BuiltinFunctionReference { .. } => {}
             Expression::MemberFunction { base, member, .. } => {
-                visitor(&**base);
-                visitor(&**member);
+                visitor(base);
+                visitor(member);
             }
             Expression::BuiltinMacroReference { .. } => {}
             Expression::ElementReference(_) => {}
-            Expression::StructFieldAccess { base, .. } => visitor(&**base),
+            Expression::StructFieldAccess { base, .. } => visitor(base),
             Expression::ArrayIndex { array, index } => {
-                visitor(&**array);
-                visitor(&**index);
+                visitor(array);
+                visitor(index);
             }
             Expression::RepeaterIndexReference { .. } => {}
             Expression::RepeaterModelReference { .. } => {}
-            Expression::Cast { from, .. } => visitor(&**from),
+            Expression::Cast { from, .. } => visitor(from),
             Expression::CodeBlock(sub) => {
                 sub.iter().for_each(visitor);
             }
             Expression::FunctionCall { function, arguments, source_location: _ } => {
-                visitor(&**function);
+                visitor(function);
                 arguments.iter().for_each(visitor);
             }
             Expression::SelfAssignment { lhs, rhs, .. } => {
-                visitor(&**lhs);
-                visitor(&**rhs);
+                visitor(lhs);
+                visitor(rhs);
             }
             Expression::ImageReference { .. } => {}
             Expression::Condition { condition, true_expr, false_expr } => {
-                visitor(&**condition);
-                visitor(&**true_expr);
-                visitor(&**false_expr);
+                visitor(condition);
+                visitor(true_expr);
+                visitor(false_expr);
             }
             Expression::BinaryExpression { lhs, rhs, .. } => {
-                visitor(&**lhs);
-                visitor(&**rhs);
+                visitor(lhs);
+                visitor(rhs);
             }
-            Expression::UnaryOp { sub, .. } => visitor(&**sub),
+            Expression::UnaryOp { sub, .. } => visitor(sub),
             Expression::Array { values, .. } => {
                 for x in values {
                     visitor(x);
@@ -767,7 +825,7 @@ impl Expression {
                 }
                 Path::Commands(commands) => visitor(commands),
             },
-            Expression::StoreLocalVariable { value, .. } => visitor(&**value),
+            Expression::StoreLocalVariable { value, .. } => visitor(value),
             Expression::ReadLocalVariable { .. } => {}
             Expression::EasingCurve(_) => {}
             Expression::LinearGradient { angle, stops } => {
@@ -792,6 +850,10 @@ impl Expression {
             }
             Expression::ComputeLayoutInfo(..) => {}
             Expression::SolveLayout(..) => {}
+            Expression::MinMax { lhs, rhs, .. } => {
+                visitor(lhs);
+                visitor(rhs);
+            }
         }
     }
 
@@ -808,41 +870,41 @@ impl Expression {
             Expression::FunctionParameterReference { .. } => {}
             Expression::BuiltinFunctionReference { .. } => {}
             Expression::MemberFunction { base, member, .. } => {
-                visitor(&mut **base);
-                visitor(&mut **member);
+                visitor(base);
+                visitor(member);
             }
             Expression::BuiltinMacroReference { .. } => {}
             Expression::ElementReference(_) => {}
-            Expression::StructFieldAccess { base, .. } => visitor(&mut **base),
+            Expression::StructFieldAccess { base, .. } => visitor(base),
             Expression::ArrayIndex { array, index } => {
-                visitor(&mut **array);
-                visitor(&mut **index);
+                visitor(array);
+                visitor(index);
             }
             Expression::RepeaterIndexReference { .. } => {}
             Expression::RepeaterModelReference { .. } => {}
-            Expression::Cast { from, .. } => visitor(&mut **from),
+            Expression::Cast { from, .. } => visitor(from),
             Expression::CodeBlock(sub) => {
                 sub.iter_mut().for_each(visitor);
             }
             Expression::FunctionCall { function, arguments, source_location: _ } => {
-                visitor(&mut **function);
+                visitor(function);
                 arguments.iter_mut().for_each(visitor);
             }
             Expression::SelfAssignment { lhs, rhs, .. } => {
-                visitor(&mut **lhs);
-                visitor(&mut **rhs);
+                visitor(lhs);
+                visitor(rhs);
             }
             Expression::ImageReference { .. } => {}
             Expression::Condition { condition, true_expr, false_expr } => {
-                visitor(&mut **condition);
-                visitor(&mut **true_expr);
-                visitor(&mut **false_expr);
+                visitor(condition);
+                visitor(true_expr);
+                visitor(false_expr);
             }
             Expression::BinaryExpression { lhs, rhs, .. } => {
-                visitor(&mut **lhs);
-                visitor(&mut **rhs);
+                visitor(lhs);
+                visitor(rhs);
             }
-            Expression::UnaryOp { sub, .. } => visitor(&mut **sub),
+            Expression::UnaryOp { sub, .. } => visitor(sub),
             Expression::Array { values, .. } => {
                 for x in values {
                     visitor(x);
@@ -867,11 +929,11 @@ impl Expression {
                 }
                 Path::Commands(commands) => visitor(commands),
             },
-            Expression::StoreLocalVariable { value, .. } => visitor(&mut **value),
+            Expression::StoreLocalVariable { value, .. } => visitor(value),
             Expression::ReadLocalVariable { .. } => {}
             Expression::EasingCurve(_) => {}
             Expression::LinearGradient { angle, stops } => {
-                visitor(&mut *angle);
+                visitor(angle);
                 for (c, s) in stops {
                     visitor(c);
                     visitor(s);
@@ -892,6 +954,10 @@ impl Expression {
             }
             Expression::ComputeLayoutInfo(..) => {}
             Expression::SolveLayout(..) => {}
+            Expression::MinMax { lhs, rhs, .. } => {
+                visitor(lhs);
+                visitor(rhs);
+            }
         }
     }
 
@@ -966,6 +1032,7 @@ impl Expression {
             Expression::LayoutCacheAccess { .. } => false,
             Expression::ComputeLayoutInfo(..) => false,
             Expression::SolveLayout(..) => false,
+            Expression::MinMax { lhs, rhs, .. } => lhs.is_constant() && rhs.is_constant(),
         }
     }
 
@@ -993,7 +1060,7 @@ impl Expression {
                 },
                 (
                     Type::Struct { fields: ref left, .. },
-                    Type::Struct { fields: right, name, node: n },
+                    Type::Struct { fields: right, name, node: n, rust_attributes },
                 ) if left != right => {
                     if let Expression::Struct { mut values, .. } = self {
                         let mut new_values = HashMap::new();
@@ -1017,6 +1084,7 @@ impl Expression {
                                         fields: left.clone(),
                                         name: name.clone(),
                                         node: n.clone(),
+                                        rust_attributes: rust_attributes.clone(),
                                     },
                                 }),
                                 name: key.clone(),
@@ -1040,26 +1108,27 @@ impl Expression {
                         if let Some(conversion_powers) =
                             crate::langtype::unit_product_length_conversion(&left, &right)
                         {
-                            let apply_power = |mut result, power: i8, builtin_fn| {
-                                let op = if power < 0 { '*' } else { '/' };
-                                for _ in 0..power.abs() {
-                                    result = Expression::BinaryExpression {
-                                        lhs: Box::new(result),
-                                        rhs: Box::new(Expression::FunctionCall {
-                                            function: Box::new(
-                                                Expression::BuiltinFunctionReference(
-                                                    builtin_fn,
-                                                    Some(node.to_source_location()),
+                            let apply_power =
+                                |mut result, power: i8, builtin_fn: BuiltinFunction| {
+                                    let op = if power < 0 { '*' } else { '/' };
+                                    for _ in 0..power.abs() {
+                                        result = Expression::BinaryExpression {
+                                            lhs: Box::new(result),
+                                            rhs: Box::new(Expression::FunctionCall {
+                                                function: Box::new(
+                                                    Expression::BuiltinFunctionReference(
+                                                        builtin_fn.clone(),
+                                                        Some(node.to_source_location()),
+                                                    ),
                                                 ),
-                                            ),
-                                            arguments: vec![],
-                                            source_location: Some(node.to_source_location()),
-                                        }),
-                                        op,
+                                                arguments: vec![],
+                                                source_location: Some(node.to_source_location()),
+                                            }),
+                                            op,
+                                        }
                                     }
-                                }
-                                result
-                            };
+                                    result
+                                };
 
                             let mut result = self;
 
@@ -1155,6 +1224,7 @@ impl Expression {
         match ty {
             Type::Invalid
             | Type::Callback { .. }
+            | Type::ComponentFactory
             | Type::Function { .. }
             | Type::Void
             | Type::InferredProperty
@@ -1258,6 +1328,18 @@ impl Expression {
                 false
             }
         }
+    }
+}
+
+fn model_inner_type(model: &Expression) -> Type {
+    match model {
+        Expression::Cast { from, to: Type::Model } => model_inner_type(from),
+        Expression::CodeBlock(cb) => cb.last().map_or(Type::Invalid, model_inner_type),
+        _ => match model.ty() {
+            Type::Float32 | Type::Int32 => Type::Int32,
+            Type::Array(elem) => *elem,
+            _ => Type::Invalid,
+        },
     }
 }
 
@@ -1565,5 +1647,15 @@ pub fn pretty_print(f: &mut dyn std::fmt::Write, expression: &Expression) -> std
         }
         Expression::ComputeLayoutInfo(..) => write!(f, "layout_info(..)"),
         Expression::SolveLayout(..) => write!(f, "solve_layout(..)"),
+        Expression::MinMax { ty: _, op, lhs, rhs } => {
+            match op {
+                MinMaxOp::Min => write!(f, "min(")?,
+                MinMaxOp::Max => write!(f, "max(")?,
+            }
+            pretty_print(f, lhs)?;
+            write!(f, ", ")?;
+            pretty_print(f, rhs)?;
+            write!(f, ")")
+        }
     }
 }

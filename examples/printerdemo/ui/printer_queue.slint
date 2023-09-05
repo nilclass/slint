@@ -1,10 +1,15 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: MIT
 
 import { DemoPalette, PushButton } from "./common.slint";
 
+enum JobStatus {
+    Waiting,
+    Printing
+}
+
 export struct PrinterQueueItem  {
-    status: string, // WAITING..., PRINTING
+    status: JobStatus,
     progress: int,
     title: string,
     owner: string,
@@ -19,10 +24,20 @@ export global PrinterQueue  {
     callback pause-job(int);
 
     in property <[PrinterQueueItem]> printer-queue: [
-        { status: "PRINTING", progress: 63, title: "210106-FinalPresentation.pdf", owner: "simon.hausmann@slint-ui.com", pages: 6, size: "143kb", submission-date: "11:41 25/01/21" },
-        { status: "WAITING...", title: "Adressliste.docx", owner: "simon.hausmann@slint-ui.com", pages: 6, size: "143kb", submission-date: "11:41 25/01/21" },
-        { status: "WAITING...", title: "210106-FinalPresentation.pdf", owner: "simon.hausmann@slint-ui.com", pages: 6, size: "143kb", submission-date: "11:41 25/01/21" },
+        { status: JobStatus.Printing, progress: 63, title: "210106-FinalPresentation.pdf", owner: "info@slint.dev", pages: 6, size: "143kb", submission-date: "11:41 25/01/21" },
+        { status: JobStatus.Waiting, title: "Adressliste.docx", owner: "info@slint.dev", pages: 6, size: "143kb", submission-date: "11:41 25/01/21" },
+        { status: JobStatus.Waiting, title: "Salaries.pdf", owner: "info@slint.dev", pages: 6, size: "143kb", submission-date: "11:41 25/01/21" },
     ];
+
+    function statusString(status: JobStatus) -> string {
+        if (status == JobStatus.Printing) {
+            @tr("PRINTING")
+        } else if (status == JobStatus.Waiting) {
+            @tr("WAITING...")
+        } else {
+            @tr("Unknown job status")
+        }
+    }    
 }
 
 
@@ -46,7 +61,7 @@ component PrintDetails inherits GridLayout {
 
     Row {
         PrintQueueDetailsLabel {
-            text: "Owner";
+            text: @tr("Job Owner");
         }
         Text {
             text: root.queue-item.owner;
@@ -63,7 +78,7 @@ component PrintDetails inherits GridLayout {
     }
     Row {
         PrintQueueDetailsLabel {
-            text: "Pages";
+            text: @tr("Pages");
         }
         Text {
             text: root.queue-item.pages;
@@ -80,7 +95,7 @@ component PrintDetails inherits GridLayout {
     }
     Row {
         PrintQueueDetailsLabel {
-            text: "Size";
+            text: @tr("Size");
         }
         Text {
             text: root.queue-item.pages;
@@ -97,7 +112,7 @@ component PrintDetails inherits GridLayout {
     }
     Row {
         PrintQueueDetailsLabel {
-            text: "Submitted";
+            text: @tr("Submitted");
         }
         Text {
             text: root.queue-item.submission-date;
@@ -159,10 +174,10 @@ component NarrowPrintQueueElement inherits Rectangle {
                 Text {
                     // TODO: text-transform: uppercase
                     text: {
-                        if (root.queue-item.status == "PRINTING") {
-                        "\{root.queue-item.progress}% - \{root.queue-item.status}"
+                        if (root.queue-item.progress > 0) {
+                            @tr("{}% - {}",root.queue-item.progress, PrinterQueue.statusString(root.queue-item.status))
                         } else {
-                            root.queue-item.status
+                            PrinterQueue.statusString(root.queue-item.status)
                         }
                     }
                     color: DemoPalette.status-label-text-color;
@@ -194,7 +209,7 @@ component NarrowPrintQueueElement inherits Rectangle {
                 }
                 PushButton {
                     opacity: root.expanded-opacity;
-                    text: "More   ";
+                    text: @tr("More   ");
                     clicked => {
                         root.show-job-details();
                     }
@@ -268,10 +283,10 @@ component WidePrintQueueElement inherits Rectangle {
             Text {
                 // TODO: text-transform: uppercase
                 text: {
-                    if (root.queue-item.status == "PRINTING") {
-                    "\{root.queue-item.progress}% - \{root.queue-item.status}"
+                    if (root.queue-item.progress > 0) {
+                        @tr("{}% - {}",root.queue-item.progress, PrinterQueue.statusString(root.queue-item.status))
                     } else {
-                        root.queue-item.status
+                        PrinterQueue.statusString(root.queue-item.status)
                     }
                 }
                 color: DemoPalette.status-label-text-color;
@@ -308,13 +323,13 @@ component WidePrintQueueElement inherits Rectangle {
             vertical-stretch: 0;
 
             PushButton {
-                text: "Pause";
+                text: @tr("Pause");
                 icon: @image-url("images/pause.svg");
                 clicked => { root.pause-job(); }
             }
             PushButton {
                 primary: false;
-                text: "Delete";
+                text: @tr("Delete");
                 icon: @image-url("images/delete.svg");
                 clicked => { root.cancel-job(); }
             }
@@ -360,7 +375,7 @@ export component PrinterQueueView inherits Rectangle {
         spacing: 16px;
 
         Text {
-            text: "Printing-Queue";
+            text: @tr("Printing Queue");
             color: DemoPalette.text-foreground-color;
             font-size: DemoPalette.base-font-size * 1.5;
             font-weight: 700;

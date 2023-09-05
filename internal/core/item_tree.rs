@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 // cSpell: ignore xffff
 
@@ -13,7 +13,7 @@ use core::pin::Pin;
 use vtable::*;
 
 fn find_sibling_outside_repeater(
-    component: crate::component::ComponentRc,
+    component: &crate::component::ComponentRc,
     comp_ref_pin: Pin<VRef<ComponentVTable>>,
     index: usize,
     sibling_step: &dyn Fn(&crate::item_tree::ComponentItemTree, usize) -> Option<usize>,
@@ -28,7 +28,7 @@ fn find_sibling_outside_repeater(
         current_sibling = sibling_step(&item_tree, current_sibling)?;
 
         if let Some(node) = step_into_node(
-            &component,
+            component,
             &comp_ref_pin,
             current_sibling,
             &item_tree,
@@ -96,14 +96,12 @@ impl ItemRc {
     }
 
     /// Returns a `VRcMapped` of this item, to conveniently access specialized item API.
-    pub fn downcast<'a, T: HasStaticVTable<ItemVTable>>(
-        &'a self,
+    pub fn downcast<T: HasStaticVTable<ItemVTable>>(
+        &self,
     ) -> Option<VRcMapped<ComponentVTable, T>> {
         #![allow(unsafe_code)]
         let item = self.borrow();
-        if ItemRef::downcast_pin::<T>(item).is_none() {
-            return None;
-        }
+        ItemRef::downcast_pin::<T>(item)?;
 
         Some(vtable::VRc::map_dyn(self.component.clone(), |comp_ref_pin| {
             let result = comp_ref_pin.as_ref().get_item_ref(self.index);
@@ -194,7 +192,7 @@ impl ItemRc {
             result += geometry.origin.to_vector();
             current = parent.clone();
         }
-        return result;
+        result
     }
 
     /// Return the index of the item within the component
@@ -202,8 +200,8 @@ impl ItemRc {
         self.index
     }
     /// Returns a reference to the component holding this item
-    pub fn component(&self) -> vtable::VRc<ComponentVTable> {
-        self.component.clone()
+    pub fn component(&self) -> &vtable::VRc<ComponentVTable> {
+        &self.component
     }
 
     fn find_child(
@@ -218,7 +216,7 @@ impl ItemRc {
         let mut current_child_index = child_access(&item_tree, self.index())?;
         loop {
             if let Some(item) = step_into_node(
-                &self.component(),
+                self.component(),
                 &comp_ref_pin,
                 current_child_index,
                 &item_tree,
@@ -262,7 +260,7 @@ impl ItemRc {
             let current_component_subtree_index = comp_ref_pin.as_ref().subtree_index();
             if let Some(parent_item) = parent_item.upgrade() {
                 let parent = parent_item.component();
-                let parent_ref_pin = vtable::VRc::borrow_pin(&parent);
+                let parent_ref_pin = vtable::VRc::borrow_pin(parent);
                 let parent_item_index = parent_item.index();
                 let parent_item_tree = crate::item_tree::ComponentItemTree::new(&parent_ref_pin);
 
@@ -290,7 +288,7 @@ impl ItemRc {
 
                 // We need to leave the repeater:
                 find_sibling_outside_repeater(
-                    parent.clone(),
+                    parent,
                     parent_ref_pin,
                     parent_item_index,
                     sibling_step,
@@ -336,7 +334,7 @@ impl ItemRc {
         step_in: &dyn Fn(ItemRc) -> ItemRc,
         step_out: &dyn Fn(&crate::item_tree::ComponentItemTree, usize) -> Option<usize>,
     ) -> Self {
-        let mut component = self.component();
+        let mut component = self.component().clone();
         let mut comp_ref_pin = vtable::VRc::borrow_pin(&self.component);
         let mut item_tree = crate::item_tree::ComponentItemTree::new(&comp_ref_pin);
 
@@ -366,13 +364,13 @@ impl ItemRc {
 
                 // Step out of the repeater
                 let root_component = root.component();
-                let root_comp_ref = vtable::VRc::borrow_pin(&root_component);
+                let root_comp_ref = vtable::VRc::borrow_pin(root_component);
                 let mut parent_node = Default::default();
                 root_comp_ref.as_ref().parent_node(&mut parent_node);
 
                 while let Some(parent) = parent_node.upgrade() {
                     // .. not at the root of the item tree:
-                    component = parent.component();
+                    component = parent.component().clone();
                     comp_ref_pin = vtable::VRc::borrow_pin(&component);
                     item_tree = crate::item_tree::ComponentItemTree::new(&comp_ref_pin);
 
@@ -380,7 +378,7 @@ impl ItemRc {
 
                     if let Some(next) = step_out(&item_tree, index) {
                         if let Some(item) = step_into_node(
-                            &parent.component(),
+                            parent.component(),
                             &comp_ref_pin,
                             next,
                             &item_tree,
@@ -396,14 +394,14 @@ impl ItemRc {
                         }
                     }
 
-                    root = ItemRc::new(component, 0);
+                    root = ItemRc::new(component.clone(), 0);
                     if let Some(item) = subtree_step(root.clone()) {
                         return step_in(item);
                     }
 
                     // Go up one more level:
                     let root_component = root.component();
-                    let root_comp_ref = vtable::VRc::borrow_pin(&root_component);
+                    let root_comp_ref = vtable::VRc::borrow_pin(root_component);
                     parent_node = Default::default();
                     root_comp_ref.as_ref().parent_node(&mut parent_node);
                 }
@@ -607,7 +605,7 @@ impl<'a> ComponentItemTree<'a> {
             match self.item_tree[parent_index] {
                 ItemTreeNode::Item { children_index, children_count, .. } => (index
                     < (children_count as usize + children_index as usize - 1))
-                    .then(|| index + 1),
+                    .then_some(index + 1),
                 ItemTreeNode::DynamicTree { .. } => {
                     unreachable!("Parent in same item tree is a repeater.")
                 }
@@ -622,7 +620,7 @@ impl<'a> ComponentItemTree<'a> {
         if let Some(parent_index) = self.parent(index) {
             match self.item_tree[parent_index] {
                 ItemTreeNode::Item { children_index, .. } => {
-                    (index > children_index as usize).then(|| index - 1)
+                    (index > children_index as usize).then_some(index - 1)
                 }
                 ItemTreeNode::DynamicTree { .. } => {
                     unreachable!("Parent in same item tree is a repeater.")
@@ -638,7 +636,7 @@ impl<'a> ComponentItemTree<'a> {
     pub fn first_child(&self, index: usize) -> Option<usize> {
         match self.item_tree.get(index)? {
             ItemTreeNode::Item { children_index, children_count, .. } => {
-                (*children_count != 0).then(|| *children_index as _)
+                (*children_count != 0).then_some(*children_index as _)
             }
             ItemTreeNode::DynamicTree { .. } => None,
         }
@@ -648,8 +646,13 @@ impl<'a> ComponentItemTree<'a> {
     /// points to an `DynamicTree`.
     pub fn last_child(&self, index: usize) -> Option<usize> {
         match self.item_tree.get(index)? {
-            ItemTreeNode::Item { children_index, children_count, .. } => (*children_count != 0)
-                .then(|| *children_index as usize + *children_count as usize - 1),
+            ItemTreeNode::Item { children_index, children_count, .. } => {
+                if *children_count != 0 {
+                    Some(*children_index as usize + *children_count as usize - 1)
+                } else {
+                    None
+                }
+            }
             ItemTreeNode::DynamicTree { .. } => None,
         }
     }
@@ -847,6 +850,7 @@ mod tests {
     use crate::items::AccessibleRole;
     use crate::layout::{LayoutInfo, Orientation};
     use crate::slice::Slice;
+    use crate::window::WindowAdapterRc;
     use crate::SharedString;
 
     use vtable::VRc;
@@ -886,6 +890,14 @@ mod tests {
             }
         }
 
+        fn embed_component(
+            self: core::pin::Pin<&Self>,
+            _parent_component: &ComponentWeak,
+            _item_tree_index: usize,
+        ) -> bool {
+            false
+        }
+
         fn layout_info(self: core::pin::Pin<&Self>, _1: Orientation) -> LayoutInfo {
             unimplemented!("Not needed for this test")
         }
@@ -919,6 +931,14 @@ mod tests {
             _: AccessibleStringProperty,
             _: &mut SharedString,
         ) {
+        }
+
+        fn window_adapter(
+            self: Pin<&Self>,
+            _do_create: bool,
+            _result: &mut Option<WindowAdapterRc>,
+        ) {
+            unimplemented!("Not needed for this test")
         }
     }
 
@@ -1022,17 +1042,17 @@ mod tests {
 
         let fc = item.first_child().unwrap();
         assert_eq!(fc.index(), 1);
-        assert!(VRc::ptr_eq(&fc.component(), &item.component()));
+        assert!(VRc::ptr_eq(fc.component(), item.component()));
 
         let fcn = fc.next_sibling().unwrap();
         assert_eq!(fcn.index(), 2);
 
         let lc = item.last_child().unwrap();
         assert_eq!(lc.index(), 3);
-        assert!(VRc::ptr_eq(&lc.component(), &item.component()));
+        assert!(VRc::ptr_eq(lc.component(), item.component()));
 
         let lcp = lc.previous_sibling().unwrap();
-        assert!(VRc::ptr_eq(&lcp.component(), &item.component()));
+        assert!(VRc::ptr_eq(lcp.component(), item.component()));
         assert_eq!(lcp.index(), 2);
 
         // Examine first child:
@@ -1214,18 +1234,18 @@ mod tests {
         assert!(item.next_sibling().is_none());
 
         let fc = item.first_child().unwrap();
-        assert!(VRc::ptr_eq(&fc.component(), &item.component()));
+        assert!(VRc::ptr_eq(fc.component(), item.component()));
         assert_eq!(fc.index(), 1);
 
         let lc = item.last_child().unwrap();
-        assert!(VRc::ptr_eq(&lc.component(), &item.component()));
+        assert!(VRc::ptr_eq(lc.component(), item.component()));
         assert_eq!(lc.index(), 3);
 
         let fcn = fc.next_sibling().unwrap();
         let lcp = lc.previous_sibling().unwrap();
 
         assert_eq!(fcn, lcp);
-        assert!(!VRc::ptr_eq(&fcn.component(), &item.component()));
+        assert!(!VRc::ptr_eq(fcn.component(), item.component()));
 
         let last = fcn.next_sibling().unwrap();
         assert_eq!(last, lc);
@@ -1366,18 +1386,18 @@ mod tests {
         assert!(item.next_sibling().is_none());
 
         let fc = item.first_child().unwrap();
-        assert!(VRc::ptr_eq(&fc.component(), &item.component()));
+        assert!(VRc::ptr_eq(fc.component(), item.component()));
         assert_eq!(fc.index(), 1);
 
         let lc = item.last_child().unwrap();
-        assert!(VRc::ptr_eq(&lc.component(), &item.component()));
+        assert!(VRc::ptr_eq(lc.component(), item.component()));
         assert_eq!(lc.index(), 3);
 
         let fcn = fc.next_sibling().unwrap();
         let lcp = lc.previous_sibling().unwrap();
 
         assert_eq!(fcn, lcp);
-        assert!(!VRc::ptr_eq(&fcn.component(), &item.component()));
+        assert!(!VRc::ptr_eq(fcn.component(), item.component()));
 
         let last = fcn.next_sibling().unwrap();
         assert_eq!(last, lc);
@@ -1390,12 +1410,12 @@ mod tests {
         assert_eq!(nested_root, fcn.last_child().unwrap());
         assert!(nested_root.next_sibling().is_none());
         assert!(nested_root.previous_sibling().is_none());
-        assert!(!VRc::ptr_eq(&nested_root.component(), &item.component()));
-        assert!(!VRc::ptr_eq(&nested_root.component(), &fcn.component()));
+        assert!(!VRc::ptr_eq(nested_root.component(), item.component()));
+        assert!(!VRc::ptr_eq(nested_root.component(), fcn.component()));
 
         let nested_child = nested_root.first_child().unwrap();
         assert_eq!(nested_child, nested_root.last_child().unwrap());
-        assert!(VRc::ptr_eq(&nested_root.component(), &nested_child.component()));
+        assert!(VRc::ptr_eq(nested_root.component(), nested_child.component()));
     }
 
     #[test]
@@ -1543,22 +1563,22 @@ mod tests {
 
         let sub1 = item.first_child().unwrap();
         assert_eq!(sub1.index(), 0);
-        assert!(!VRc::ptr_eq(&sub1.component(), &item.component()));
+        assert!(!VRc::ptr_eq(sub1.component(), item.component()));
 
         // assert!(sub1.previous_sibling().is_none());
 
         let sub2 = sub1.next_sibling().unwrap();
         assert_eq!(sub2.index(), 0);
-        assert!(!VRc::ptr_eq(&sub1.component(), &sub2.component()));
-        assert!(!VRc::ptr_eq(&item.component(), &sub2.component()));
+        assert!(!VRc::ptr_eq(sub1.component(), sub2.component()));
+        assert!(!VRc::ptr_eq(item.component(), sub2.component()));
 
         assert!(sub2.previous_sibling() == Some(sub1.clone()));
 
         let sub3 = sub2.next_sibling().unwrap();
         assert_eq!(sub3.index(), 0);
-        assert!(!VRc::ptr_eq(&sub1.component(), &sub2.component()));
-        assert!(!VRc::ptr_eq(&sub2.component(), &sub3.component()));
-        assert!(!VRc::ptr_eq(&item.component(), &sub3.component()));
+        assert!(!VRc::ptr_eq(sub1.component(), sub2.component()));
+        assert!(!VRc::ptr_eq(sub2.component(), sub3.component()));
+        assert!(!VRc::ptr_eq(item.component(), sub3.component()));
 
         assert_eq!(sub3.previous_sibling().unwrap(), sub2.clone());
     }

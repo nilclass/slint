@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 // cSpell: ignore langtype typeregister
 
@@ -59,6 +59,12 @@ export component ClippedImage inherits ImageItem {
 
 export { ClippedImage as Image }
 
+export component ComponentContainer inherits Empty {
+    in property <component-factory> component-factory;
+
+    //-default_size_binding:expands_to_parent_geometry
+}
+
 export component Rotate inherits Empty {
     in property <angle> rotation-angle;
     in property <length> rotation-origin-x;
@@ -71,6 +77,7 @@ export component Text inherits Empty {
     in property <string> text;
     in property <string> font-family;
     in property <length> font-size;
+    in property <bool> font-italic;
     in property <int> font-weight;
     in property <brush> color;  // StyleMetrics.default-text-color  set in apply_default_properties_from_style
     in property <TextHorizontalAlignment> horizontal-alignment;
@@ -79,13 +86,6 @@ export component Text inherits Empty {
     in property <TextWrap> wrap;
     in property <length> letter-spacing;
     //-default_size_binding:implicit_size
-}
-
-
-export struct PointerEvent {
-    //-name:slint::private_api::PointerEvent
-    button: PointerEventButton,
-    kind: PointerEventKind,
 }
 
 export component TouchArea {
@@ -105,20 +105,6 @@ export component TouchArea {
     callback moved;
     callback pointer-event(PointerEvent);
     //-default_size_binding:expands_to_parent_geometry
-}
-
-export struct KeyboardModifiers {
-    //-name:slint::private_api::KeyboardModifiers
-    alt: bool,
-    control: bool,
-    shift: bool,
-    meta: bool,
-}
-
-export struct KeyEvent {
-    //-name:slint::private_api::KeyEvent
-    text: string,
-    modifiers: KeyboardModifiers,
 }
 
 export component FocusScope {
@@ -171,16 +157,11 @@ export component BoxShadow inherits Empty {
     //-is_internal
 }
 
-export struct Point {
-    //-name:slint::private_api::Point
-    x: length,
-    y: length,
-}
-
 export component TextInput {
     in-out property <string> text;
     in property <string> font-family;
     in property <length> font-size;
+    in property <bool> font-italic;
     in property <int> font-weight;
     in property <brush> color; // StyleMetrics.default-text-color  set in apply_default_properties_from_style
     in property <color> selection-foreground-color: #000;
@@ -210,6 +191,11 @@ export component TextInput {
     out property <string> preedit-text;
     //-default_size_binding:expands_to_parent_geometry
     //-accepts_focus
+    function select-all() {}
+    function clear-selection() {}
+    function cut() {}
+    function copy() {}
+    function paste() {}
 }
 
 export component Clip {
@@ -381,6 +367,7 @@ export component PopupWindow {
     in property <length> anchor_y;
     in property <length> anchor_height;
     in property <length> anchor_width;*/
+    in property <bool> close-on-click: true;
     //show() is hardcoded in typeregister.rs
 }
 
@@ -392,28 +379,6 @@ component PropertyAnimation {
     in property <easing> easing;
     in property <float> iteration-count: 1.0;
     //-is_non_item_type
-}
-
-export struct StandardListViewItem {
-    //-name:slint::StandardListViewItem
-    text: string,
-}
-
-export struct TableColumn {
-    //-name:slint::private_api::TableColumn
-    title: string,
-    min-width: length,
-    horizontal-stretch: float,
-    sort-order: SortOrder,
-    width: length,
-}
-
-export struct StateInfo {
-    //-name:slint::private_api::StateInfo
-    current_state: int,
-    previous_state: int,
-    //change_time: duration,
-    //-is_internal
 }
 
 export global TextInputInterface {
@@ -431,6 +396,7 @@ export component NativeButton {
     in property <bool> checkable;
     in-out property <bool> checked;
     out property <bool> has-focus;
+    in property <bool> primary;
     callback clicked;
     in property <bool> enabled: true;
     in property <StandardButtonKind> standard-button-kind;
@@ -461,6 +427,7 @@ export component NativeSpinBox {
     in-out property <int> value;
     in property <int> minimum;
     in property <int> maximum: 100;
+    callback edited(int /* value */);
     //-is_internal
 }
 
@@ -473,7 +440,18 @@ export component NativeSlider {
     in-out property <float> value;
     in property <float> minimum;
     in property <float> maximum: 100;
+    in property <Orientation> orientation: Orientation.horizontal;
     callback changed(float);
+    //-is_internal
+}
+
+export component NativeProgressIndicator {
+    in property <length> x;
+    in property <length> y;
+    in property <length> width;
+    in property <length> height;
+    in property <bool> indeterminate;
+    in property <float> progress;
     //-is_internal
 }
 
@@ -536,6 +514,7 @@ export component NativeStandardListViewItem {
     in property <StandardListViewItem> item;
     in-out property <bool> is_selected;
     in property <bool> has_hover;
+    in property <bool> combobox;
     //-is_internal
 }
 

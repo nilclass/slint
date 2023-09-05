@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 use i_slint_core::input::FocusEventResult;
 
@@ -27,17 +27,26 @@ pub struct NativeScrollView {
     pub enabled: Property<bool>,
     pub has_focus: Property<bool>,
     data: Property<NativeSliderData>,
+    widget_ptr: std::cell::Cell<SlintTypeErasedWidgetPtr>,
+    animation_tracker: Property<i32>,
+    // TODO: allocate two widgets for each scrollbar and a tracker for each as well,
+    // for animated scrollbars...
 }
 
 impl Item for NativeScrollView {
-    fn init(self: Pin<&Self>, _window_adapter: &Rc<dyn WindowAdapter>) {
+    fn init(self: Pin<&Self>, _self_rc: &ItemRc) {
+        let animation_tracker_property_ptr = Self::FIELD_OFFSETS.animation_tracker.apply_pin(self);
+        self.widget_ptr.set(cpp! { unsafe [animation_tracker_property_ptr as "void*"] -> SlintTypeErasedWidgetPtr as "std::unique_ptr<SlintTypeErasedWidget>"  {
+            return make_unique_animated_widget<QWidget>(animation_tracker_property_ptr);
+        }});
+
         let paddings = Rc::pin(Property::default());
 
         paddings.as_ref().set_binding(move || {
         cpp!(unsafe [] -> qttypes::QMargins as "QMargins" {
             ensure_initialized();
             QStyleOptionSlider option;
-            initQSliderOptions(option, false, true, 0, 0, 1000, 1000);
+            initQSliderOptions(option, false, true, 0, 0, 1000, 1000, false);
 
             int extent = qApp->style()->pixelMetric(QStyle::PM_ScrollBarExtent, &option, nullptr);
             int sliderMin = qApp->style()->pixelMetric(QStyle::PM_ScrollBarSliderMin, &option, nullptr);
@@ -148,7 +157,7 @@ impl Item for NativeScrollView {
             ] -> u32 as "int" {
                 ensure_initialized();
                 QStyleOptionSlider option;
-                initQSliderOptions(option, pressed, true, active_controls, 0, max, -value);
+                initQSliderOptions(option, pressed, true, active_controls, 0, max, -value, false);
                 option.pageStep = page_size;
                 if (!horizontal) {
                     option.state ^= QStyle::State_Horizontal;
@@ -301,6 +310,7 @@ impl Item for NativeScrollView {
         ] -> bool as "bool" {
             ensure_initialized();
             QStyleOptionFrame frameOption;
+            frameOption.styleObject = widget;
             frameOption.state |= QStyle::State(initial_state);
             frameOption.frameShape = QFrame::StyledPanel;
 
@@ -373,7 +383,7 @@ impl Item for NativeScrollView {
                 QStyleOptionSlider option;
                 option.state |= QStyle::State(initial_state);
                 option.rect = QRect(QPoint(), r.size());
-                initQSliderOptions(option, pressed, true, active_controls, 0, max / dpr, -value / dpr);
+                initQSliderOptions(option, pressed, true, active_controls, 0, max / dpr, -value / dpr, false);
                 option.subControls = QStyle::SC_All;
                 option.pageStep = page_size / dpr;
                 if (has_focus)

@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 // This file is common code shared by both vscode plugin entry points
 
@@ -51,7 +51,9 @@ export class ClientHandle {
     async stop() {
         if (this.#client) {
             // mark as stopped so that we don't detect it as a crash
-            Object.defineProperty(this.#client, "slint_stopped", { value: true });
+            Object.defineProperty(this.#client, "slint_stopped", {
+                value: true,
+            });
             await this.#client.stop();
         }
     }
@@ -101,7 +103,7 @@ export function languageClientOptions(
                     if (showPreview(args)) {
                         return;
                     }
-                } else if (command == "slint/toggleDesignMode") {
+                } else if (command === "slint/toggleDesignMode") {
                     if (toggleDesignMode(args)) {
                         return;
                     }
@@ -171,18 +173,6 @@ export function activate(
         ),
     );
     properties_provider.refresh_view();
-
-    vscode.workspace.onDidChangeConfiguration(async (ev) => {
-        if (ev.affectsConfiguration("slint")) {
-            properties_provider.client?.sendNotification(
-                "workspace/didChangeConfiguration",
-                {
-                    settings: "",
-                },
-            );
-            wasm_preview.refreshPreview();
-        }
-    });
 
     vscode.workspace.onDidChangeTextDocument(async (ev) => {
         if (

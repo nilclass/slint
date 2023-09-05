@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 use by_address::ByAddress;
 
@@ -63,6 +63,7 @@ pub enum LoweredElement {
     SubComponent { sub_component_index: usize },
     NativeItem { item_index: usize },
     Repeated { repeated_index: usize },
+    ComponentPlaceholder { component_container_index: ComponentContainerIndex },
 }
 
 #[derive(Default, Debug, Clone)]
@@ -113,6 +114,7 @@ impl LoweredSubComponentMapping {
                 };
             }
             LoweredElement::Repeated { .. } => unreachable!(),
+            LoweredElement::ComponentPlaceholder { .. } => unreachable!(),
         }
     }
 }
@@ -184,6 +186,7 @@ fn lower_sub_component(
         functions: Default::default(),
         items: Default::default(),
         repeated: Default::default(),
+        component_containers: Default::default(),
         popup_windows: Default::default(),
         sub_components: Default::default(),
         property_init: Default::default(),
@@ -199,6 +202,7 @@ fn lower_sub_component(
     };
     let mut mapping = LoweredSubComponentMapping::default();
     let mut repeated = vec![];
+    let mut component_container_data = vec![];
     let mut accessible_prop = Vec::new();
 
     if let Some(parent) = component.parent_element.upgrade() {
@@ -253,6 +257,15 @@ fn lower_sub_component(
                 ty: x.property_type.clone(),
                 ..Property::default()
             });
+        }
+        if elem.is_component_placeholder {
+            let index = parent.as_ref().unwrap().borrow().item_index.get().copied().unwrap();
+            mapping.element_mapping.insert(
+                element.clone().into(),
+                LoweredElement::ComponentPlaceholder { component_container_index: index.into() },
+            );
+            component_container_data.push(parent.as_ref().unwrap().clone());
+            return None;
         }
         if elem.repeated.is_some() {
             mapping.element_mapping.insert(
@@ -386,6 +399,13 @@ fn lower_sub_component(
     for s in &mut sub_component.sub_components {
         s.repeater_offset += sub_component.repeated.len();
     }
+    sub_component.component_containers = component_container_data
+        .into_iter()
+        .map(|component_container| {
+            lower_component_container(&component_container, &sub_component, &ctx)
+        })
+        .collect();
+
     sub_component.popup_windows = component
         .popup_windows
         .borrow()
@@ -502,10 +522,29 @@ fn lower_repeated_component(elem: &ElementRc, ctx: &ExpressionContext) -> Repeat
             root: Rc::try_unwrap(sc.sub_component).unwrap(),
             parent_context: Some(e.enclosing_component.upgrade().unwrap().id.clone()),
         },
-        index_prop: (!repeated.is_conditional_element).then(|| 1),
-        data_prop: (!repeated.is_conditional_element).then(|| 0),
+        index_prop: (!repeated.is_conditional_element).then_some(1),
+        data_prop: (!repeated.is_conditional_element).then_some(0),
         index_in_tree: *e.item_index.get().unwrap(),
         listview,
+    }
+}
+
+fn lower_component_container(
+    container: &ElementRc,
+    sub_component: &SubComponent,
+    _ctx: &ExpressionContext,
+) -> ComponentContainerElement {
+    let c = container.borrow();
+
+    let component_container_index: ComponentContainerIndex = (*c.item_index.get().unwrap()).into();
+    let ti = component_container_index.as_item_tree_index();
+    let component_container_items_index =
+        sub_component.items.iter().position(|i| i.index_in_tree == ti).unwrap();
+
+    ComponentContainerElement {
+        component_container_item_tree_index: component_container_index,
+        component_container_items_index,
+        component_placeholder_item_tree_index: *c.item_index_of_first_children.get().unwrap(),
     }
 }
 
@@ -701,6 +740,13 @@ fn make_tree(
             is_accessible: false,
             sub_component_path: sub_component_path.into(),
             item_index: *repeated_index,
+            children: vec![],
+            repeated: true,
+        },
+        LoweredElement::ComponentPlaceholder { component_container_index } => TreeNode {
+            is_accessible: false,
+            sub_component_path: sub_component_path.into(),
+            item_index: component_container_index.as_repeater_index(),
             children: vec![],
             repeated: true,
         },

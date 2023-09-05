@@ -1,15 +1,17 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 #![doc = include_str!("README.md")]
-#![doc(html_logo_url = "https://slint-ui.com/logo/slint-logo-square-light.svg")]
+#![doc(html_logo_url = "https://slint.dev/logo/slint-logo-square-light.svg")]
 
 use i_slint_core::graphics::euclid::{Point2D, Size2D};
+use i_slint_core::graphics::FontRequest;
 use i_slint_core::lengths::{LogicalLength, LogicalPoint, LogicalRect, LogicalSize, ScaleFactor};
-use i_slint_core::renderer::Renderer;
-use i_slint_core::window::WindowAdapter;
-use i_slint_core::window::WindowAdapterSealed;
+use i_slint_core::renderer::{Renderer, RendererSealed};
+use i_slint_core::window::WindowAdapterInternal;
+use i_slint_core::window::{InputMethodRequest, WindowAdapter};
 
+use std::cell::RefCell;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Mutex;
@@ -17,6 +19,7 @@ use std::sync::Mutex;
 #[derive(Default)]
 pub struct TestingBackend {
     clipboard: Mutex<Option<String>>,
+    queue: Option<Queue>,
 }
 
 impl i_slint_core::platform::Platform for TestingBackend {
@@ -25,7 +28,8 @@ impl i_slint_core::platform::Platform for TestingBackend {
     ) -> Result<Rc<dyn WindowAdapter>, i_slint_core::platform::PlatformError> {
         Ok(Rc::new_cyclic(|self_weak| TestingWindow {
             window: i_slint_core::api::Window::new(self_weak.clone() as _),
-            shown: false.into(),
+            size: PhysicalSize::new(600, 800).into(),
+            ime_requests: Default::default(),
         }))
     }
 
@@ -47,42 +51,43 @@ impl i_slint_core::platform::Platform for TestingBackend {
             None
         }
     }
+
+    fn run_event_loop(&self) -> Result<(), PlatformError> {
+        let queue = match self.queue.as_ref() {
+            Some(queue) => queue.clone(),
+            None => return Err(PlatformError::NoEventLoopProvider),
+        };
+
+        loop {
+            let e = queue.0.lock().unwrap().pop_front();
+            match e {
+                Some(Event::Quit) => break Ok(()),
+                Some(Event::Event(e)) => e(),
+                None => std::thread::park(),
+            }
+        }
+    }
+
+    fn new_event_loop_proxy(&self) -> Option<Box<dyn i_slint_core::platform::EventLoopProxy>> {
+        self.queue
+            .as_ref()
+            .map(|q| Box::new(q.clone()) as Box<dyn i_slint_core::platform::EventLoopProxy>)
+    }
 }
 
 pub struct TestingWindow {
     window: i_slint_core::api::Window,
-    shown: core::cell::Cell<bool>,
+    size: core::cell::Cell<PhysicalSize>,
+    pub ime_requests: RefCell<Vec<InputMethodRequest>>,
 }
 
-impl WindowAdapterSealed for TestingWindow {
-    fn show(&self) -> Result<(), PlatformError> {
-        self.shown.set(true);
-        Ok(())
-    }
-
-    fn hide(&self) -> Result<(), i_slint_core::platform::PlatformError> {
-        self.shown.set(false);
-        Ok(())
-    }
-
-    fn renderer(&self) -> &dyn Renderer {
-        self
-    }
-
+impl WindowAdapterInternal for TestingWindow {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
 
-    fn position(&self) -> i_slint_core::api::PhysicalPosition {
-        unimplemented!()
-    }
-
-    fn set_position(&self, _position: i_slint_core::api::WindowPosition) {
-        unimplemented!()
-    }
-
-    fn is_visible(&self) -> bool {
-        self.shown.get()
+    fn input_method_request(&self, request: i_slint_core::window::InputMethodRequest) {
+        self.ime_requests.borrow_mut().push(request)
     }
 }
 
@@ -90,9 +95,28 @@ impl WindowAdapter for TestingWindow {
     fn window(&self) -> &i_slint_core::api::Window {
         &self.window
     }
+
+    fn size(&self) -> PhysicalSize {
+        self.size.get()
+    }
+
+    fn set_size(&self, size: i_slint_core::api::WindowSize) {
+        self.window.dispatch_event(i_slint_core::platform::WindowEvent::Resized {
+            size: size.to_logical(1.),
+        });
+        self.size.set(size.to_physical(1.))
+    }
+
+    fn renderer(&self) -> &dyn Renderer {
+        self
+    }
+
+    fn internal(&self, _: i_slint_core::InternalToken) -> Option<&dyn WindowAdapterInternal> {
+        Some(self)
+    }
 }
 
-impl Renderer for TestingWindow {
+impl RendererSealed for TestingWindow {
     fn text_size(
         &self,
         _font_request: i_slint_core::graphics::FontRequest,
@@ -108,6 +132,8 @@ impl Renderer for TestingWindow {
         &self,
         text_input: Pin<&i_slint_core::items::TextInput>,
         pos: LogicalPoint,
+        _font_request: FontRequest,
+        _scale_factor: ScaleFactor,
     ) -> usize {
         let text_len = text_input.text().len();
         let result = pos.x / 10.;
@@ -119,6 +145,8 @@ impl Renderer for TestingWindow {
         &self,
         _text_input: Pin<&i_slint_core::items::TextInput>,
         byte_offset: usize,
+        _font_request: FontRequest,
+        _scale_factor: ScaleFactor,
     ) -> LogicalRect {
         LogicalRect::new(Point2D::new(byte_offset as f32 * 10., 0.), Size2D::new(1., 10.))
     }
@@ -140,19 +168,60 @@ impl Renderer for TestingWindow {
     fn default_font_size(&self) -> LogicalLength {
         LogicalLength::new(10.)
     }
+
+    fn set_window_adapter(&self, _window_adapter: &Rc<dyn WindowAdapter>) {
+        // No-op since TestingWindow is also the WindowAdapter
+    }
+}
+
+enum Event {
+    Quit,
+    Event(Box<dyn FnOnce() + Send>),
+}
+#[derive(Clone)]
+struct Queue(
+    std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<Event>>>,
+    std::thread::Thread,
+);
+
+impl i_slint_core::platform::EventLoopProxy for Queue {
+    fn quit_event_loop(&self) -> Result<(), i_slint_core::api::EventLoopError> {
+        self.0.lock().unwrap().push_back(Event::Quit);
+        self.1.unpark();
+        Ok(())
+    }
+
+    fn invoke_from_event_loop(
+        &self,
+        event: Box<dyn FnOnce() + Send>,
+    ) -> Result<(), i_slint_core::api::EventLoopError> {
+        self.0.lock().unwrap().push_back(Event::Event(event));
+        self.1.unpark();
+        Ok(())
+    }
 }
 
 /// Initialize the testing backend.
 /// Must be called before any call that would otherwise initialize the rendering backend.
 /// Calling it when the rendering backend is already initialized will have no effects
 pub fn init() {
-    i_slint_core::platform::set_platform(Box::new(TestingBackend::default()))
+    i_slint_core::platform::set_platform(Box::<TestingBackend>::default())
         .expect("platform already initialized");
+}
+
+/// Initialize the testing backend with support for simple event loop.
+/// This function can only be called once per process, so make sure to use integration
+/// tests with one `#[test]` function.
+pub fn init_with_event_loop() {
+    let mut backend = TestingBackend::default();
+    backend.queue = Some(Queue(Default::default(), std::thread::current()));
+    i_slint_core::platform::set_platform(Box::new(backend)).expect("platform already initialized");
 }
 
 /// This module contains functions useful for unit tests
 mod for_unit_test {
     use i_slint_core::api::ComponentHandle;
+    use i_slint_core::platform::WindowEvent;
     pub use i_slint_core::tests::slint_mock_elapsed_time as mock_elapsed_time;
     use i_slint_core::window::WindowInner;
     use i_slint_core::SharedString;
@@ -215,9 +284,22 @@ mod for_unit_test {
         component: &Component,
         factor: f32,
     ) {
-        WindowInner::from_pub(component.window()).set_scale_factor(factor)
+        component.window().dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor: factor });
     }
 }
 
+pub fn access_testing_window<R>(
+    window: &i_slint_core::api::Window,
+    callback: impl FnOnce(&TestingWindow) -> R,
+) -> R {
+    i_slint_core::window::WindowInner::from_pub(window)
+        .window_adapter()
+        .internal(i_slint_core::InternalToken)
+        .and_then(|wa| wa.as_any().downcast_ref::<TestingWindow>())
+        .map(callback)
+        .expect("access_testing_window called without testing backend/adapter")
+}
+
 pub use for_unit_test::*;
+use i_slint_core::api::PhysicalSize;
 use i_slint_core::platform::PlatformError;

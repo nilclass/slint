@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 /*!
     Support for timers.
@@ -19,9 +19,9 @@ type SingleShotTimerCallback = Box<dyn FnOnce()>;
 
 /// The TimerMode specifies what should happen after the timer fired.
 ///
-/// Used by the [`Timer::start`] function.
+/// Used by the [`Timer::start()`] function.
 #[derive(Copy, Clone)]
-#[repr(C)]
+#[repr(u8)]
 #[non_exhaustive]
 pub enum TimerMode {
     /// A SingleShot timer is fired only once.
@@ -104,13 +104,12 @@ impl Timer {
     pub fn single_shot(duration: core::time::Duration, callback: impl FnOnce() + 'static) {
         CURRENT_TIMERS.with(|timers| {
             let mut timers = timers.borrow_mut();
-            let id = timers.start_or_restart_timer(
+            timers.start_or_restart_timer(
                 None,
                 TimerMode::SingleShot,
                 duration,
                 CallbackVariant::SingleShot(Box::new(callback)),
             );
-            timers.timers[id].removed = true;
         })
     }
 
@@ -144,6 +143,23 @@ impl Timer {
             .map(|timer_id| CURRENT_TIMERS.with(|timers| timers.borrow().timers[timer_id].running))
             .unwrap_or(false)
     }
+
+    /// Change the duration of timer. If the timer was previously started by calling [`Self::start()`]
+    /// with a duration and callback, then the time when the callback will be next invoked
+    /// is re-calculated to be in the specified duration relative to when this function is called.
+    ///
+    /// Does nothing if the timer was never started.
+    ///
+    /// Arguments:
+    /// * `interval`: The duration from now until when the timer should fire. And the period of that timer
+    ///    for [`Repeated`](TimerMode::Repeated) timers.
+    pub fn set_interval(&self, interval: core::time::Duration) {
+        if let Some(id) = self.id.get() {
+            CURRENT_TIMERS.with(|timers| {
+                timers.borrow_mut().set_interval(id, interval);
+            });
+        }
+    }
 }
 
 impl Drop for Timer {
@@ -162,27 +178,15 @@ enum CallbackVariant {
     SingleShot(SingleShotTimerCallback),
 }
 
-impl CallbackVariant {
-    fn invoke(&mut self) {
-        use CallbackVariant::*;
-        match self {
-            Empty => (),
-            MultiFire(cb) => cb(),
-            SingleShot(_) => {
-                if let SingleShot(cb) = core::mem::replace(self, Empty) {
-                    cb();
-                }
-            }
-        }
-    }
-}
-
 struct TimerData {
     duration: core::time::Duration,
     mode: TimerMode,
     running: bool,
     /// Set to true when it is removed when the callback is still running
     removed: bool,
+    /// true if it is in the cached the active_timers list in the maybe_activate_timers stack
+    being_activated: bool,
+
     callback: CallbackVariant,
 }
 
@@ -231,6 +235,14 @@ impl TimerList {
             // The active timer list is cleared here and not-yet-fired ones are inserted below, in order to allow
             // timer callbacks to register their own timers.
             let timers_to_process = core::mem::take(&mut timers.borrow_mut().active_timers);
+            {
+                let mut timers = timers.borrow_mut();
+                for active_timer in &timers_to_process {
+                    let timer = &mut timers.timers[active_timer.id];
+                    assert!(!timer.being_activated);
+                    timer.being_activated = true;
+                }
+            }
             for active_timer in timers_to_process.into_iter() {
                 if active_timer.timeout <= now {
                     any_activated = true;
@@ -253,7 +265,16 @@ impl TimerList {
                         )
                     };
 
-                    callback.invoke();
+                    match callback {
+                        CallbackVariant::Empty => (),
+                        CallbackVariant::MultiFire(ref mut cb) => cb(),
+                        CallbackVariant::SingleShot(cb) => {
+                            cb();
+                            timers.borrow_mut().callback_active = None;
+                            timers.borrow_mut().timers.remove(active_timer.id);
+                            continue;
+                        }
+                    };
 
                     let mut timers = timers.borrow_mut();
 
@@ -266,15 +287,23 @@ impl TimerList {
                     }
 
                     timers.callback_active = None;
-
-                    if timers.timers[active_timer.id].removed {
+                    let t = &mut timers.timers[active_timer.id];
+                    if t.removed {
                         timers.timers.remove(active_timer.id);
+                    } else {
+                        t.being_activated = false;
                     }
                 } else {
-                    timers.borrow_mut().register_active_timer(active_timer);
+                    let mut timers = timers.borrow_mut();
+                    let t = &mut timers.timers[active_timer.id];
+                    if t.removed {
+                        timers.timers.remove(active_timer.id);
+                    } else {
+                        t.being_activated = false;
+                        timers.register_active_timer(active_timer);
+                    }
                 }
             }
-
             any_activated
         })
     }
@@ -286,7 +315,14 @@ impl TimerList {
         duration: core::time::Duration,
         callback: CallbackVariant,
     ) -> usize {
-        let timer_data = TimerData { duration, mode, running: false, removed: false, callback };
+        let timer_data = TimerData {
+            duration,
+            mode,
+            running: false,
+            removed: false,
+            callback,
+            being_activated: false,
+        };
         let inactive_timer_id = if let Some(id) = id {
             self.deactivate_timer(id);
             self.timers[id] = timer_data;
@@ -329,10 +365,26 @@ impl TimerList {
 
     fn remove_timer(&mut self, timer_id: usize) {
         self.deactivate_timer(timer_id);
-        if self.callback_active == Some(timer_id) {
-            self.timers[timer_id].removed = true;
+        let t = &mut self.timers[timer_id];
+        if t.being_activated {
+            t.removed = true;
         } else {
             self.timers.remove(timer_id);
+        }
+    }
+
+    fn set_interval(&mut self, timer_id: usize, duration: core::time::Duration) {
+        let timer = &self.timers[timer_id];
+        if matches!(timer.mode, TimerMode::SingleShot) {
+            return;
+        }
+
+        if timer.running {
+            self.deactivate_timer(timer_id);
+            self.timers[timer_id].duration = duration;
+            self.activate_timer(timer_id);
+        } else {
+            self.timers[timer_id].duration = duration;
         }
     }
 }
@@ -582,7 +634,124 @@ for _ in 0..20 {
 assert_eq!(state.borrow().timer_200_called, 7011);
 assert_eq!(state.borrow().timer_once_called, 2);
 assert_eq!(state.borrow().timer_500_called, 3004);
+
+// Test set interval
+let state_ = state.clone();
+state.borrow_mut().timer_200.start(TimerMode::Repeated, Duration::from_millis(200), move || {
+    state_.borrow_mut().timer_200_called += 1;
+});
+let state_ = state.clone();
+state.borrow_mut().timer_once.start(TimerMode::Repeated, Duration::from_millis(300), move || {
+    state_.borrow_mut().timer_once_called += 1;
+    state_.borrow().timer_once.stop();
+});
+let state_ = state.clone();
+state.borrow_mut().timer_500.start(TimerMode::Repeated, Duration::from_millis(500), move || {
+    state_.borrow_mut().timer_500_called += 1;
+});
+
+let state_ = state.clone();
+slint::platform::update_timers_and_animations();
+for _ in 0..5 {
+    i_slint_core::tests::slint_mock_elapsed_time(100);
+}
+slint::platform::update_timers_and_animations();
+assert_eq!(state.borrow().timer_200_called, 7013);
+assert_eq!(state.borrow().timer_once_called, 3);
+assert_eq!(state.borrow().timer_500_called, 3005);
+
+for _ in 0..20 {
+    state.borrow().timer_200.set_interval(Duration::from_millis(200 * 2));
+    state.borrow().timer_once.set_interval(Duration::from_millis(300 * 2));
+    state.borrow().timer_500.set_interval(Duration::from_millis(500 * 2));
+
+    assert_eq!(state.borrow().timer_200_called, 7013);
+    assert_eq!(state.borrow().timer_once_called, 3);
+    assert_eq!(state.borrow().timer_500_called, 3005);
+
+    i_slint_core::tests::slint_mock_elapsed_time(100);
+}
+
+slint::platform::update_timers_and_animations();
+for _ in 0..9 {
+    i_slint_core::tests::slint_mock_elapsed_time(100);
+}
+slint::platform::update_timers_and_animations();
+assert_eq!(state.borrow().timer_200_called, 7015);
+assert_eq!(state.borrow().timer_once_called, 3);
+assert_eq!(state.borrow().timer_500_called, 3006);
+
+state.borrow_mut().timer_once.restart();
+for _ in 0..4 {
+    i_slint_core::tests::slint_mock_elapsed_time(100);
+}
+assert_eq!(state.borrow().timer_once_called, 3);
+for _ in 0..4 {
+    i_slint_core::tests::slint_mock_elapsed_time(100);
+}
+assert_eq!(state.borrow().timer_once_called, 4);
+
 ```
  */
 #[cfg(doctest)]
 const _TIMER_TESTS: () = ();
+
+/**
+ * Test that deleting an active timer from a timer event works.
+```rust
+// There is a 200 ms timer that increase variable1
+// after 500ms, that timer is destroyed by a single shot timer,
+// and a new new timer  increase variable2
+i_slint_backend_testing::init();
+use slint::{Timer, TimerMode};
+use std::{rc::Rc, cell::RefCell, time::Duration};
+#[derive(Default)]
+struct SharedState {
+    repeated_timer: Timer,
+    variable1: usize,
+    variable2: usize,
+}
+let state = Rc::new(RefCell::new(SharedState::default()));
+// Note: state will be leaked because of circular dependencies: don't do that in production
+let state_ = state.clone();
+state.borrow_mut().repeated_timer.start(TimerMode::Repeated, Duration::from_millis(200), move || {
+    state_.borrow_mut().variable1 += 1;
+});
+let state_ = state.clone();
+Timer::single_shot(Duration::from_millis(500), move || {
+    state_.borrow_mut().repeated_timer = Default::default();
+    let state = state_.clone();
+    state_.borrow_mut().repeated_timer.start(TimerMode::Repeated, Duration::from_millis(200), move || {
+        state.borrow_mut().variable2 += 1;
+    })
+} );
+i_slint_core::tests::slint_mock_elapsed_time(10);
+assert_eq!(state.borrow().variable1, 0);
+assert_eq!(state.borrow().variable2, 0);
+i_slint_core::tests::slint_mock_elapsed_time(200);
+assert_eq!(state.borrow().variable1, 1);
+assert_eq!(state.borrow().variable2, 0);
+i_slint_core::tests::slint_mock_elapsed_time(200);
+assert_eq!(state.borrow().variable1, 2);
+assert_eq!(state.borrow().variable2, 0);
+i_slint_core::tests::slint_mock_elapsed_time(100);
+// More than 500ms have elapsed, the single shot timer should have been activated, but that has no effect on variable 1 and 2
+// This should just restart the timer so that the next change should happen 200ms from now
+assert_eq!(state.borrow().variable1, 2);
+assert_eq!(state.borrow().variable2, 0);
+i_slint_core::tests::slint_mock_elapsed_time(110);
+assert_eq!(state.borrow().variable1, 2);
+assert_eq!(state.borrow().variable2, 0);
+i_slint_core::tests::slint_mock_elapsed_time(100);
+assert_eq!(state.borrow().variable1, 2);
+assert_eq!(state.borrow().variable2, 1);
+i_slint_core::tests::slint_mock_elapsed_time(100);
+assert_eq!(state.borrow().variable1, 2);
+assert_eq!(state.borrow().variable2, 1);
+i_slint_core::tests::slint_mock_elapsed_time(100);
+assert_eq!(state.borrow().variable1, 2);
+assert_eq!(state.borrow().variable2, 2);
+```
+ */
+#[cfg(doctest)]
+const _BUG3029: () = ();

@@ -1,10 +1,11 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 // cspell:ignore Noto fontconfig
 
 use core::num::NonZeroUsize;
 use femtovg::TextContext;
+use i_slint_common::sharedfontdb::{self, fontdb};
 use i_slint_core::graphics::euclid;
 use i_slint_core::graphics::FontRequest;
 use i_slint_core::items::{TextHorizontalAlignment, TextOverflow, TextVerticalAlignment, TextWrap};
@@ -16,64 +17,11 @@ use std::collections::{HashMap, HashSet};
 use super::{PhysicalLength, PhysicalPoint, PhysicalSize};
 
 pub const DEFAULT_FONT_SIZE: LogicalLength = LogicalLength::new(12.);
-pub const DEFAULT_FONT_WEIGHT: i32 = 400; // CSS normal
-
-#[cfg(all(
-    not(any(
-        target_family = "windows",
-        target_os = "macos",
-        target_os = "ios",
-        target_arch = "wasm32"
-    )),
-    feature = "fontconfig"
-))]
-mod fontconfig;
-
-/// This function can be used to register a custom TrueType font with Slint,
-/// for use with the `font-family` property. The provided slice must be a valid TrueType
-/// font.
-pub fn register_font_from_memory(data: &'static [u8]) -> Result<(), Box<dyn std::error::Error>> {
-    FONT_CACHE.with(|cache| {
-        cache
-            .borrow_mut()
-            .available_fonts
-            .load_font_source(fontdb::Source::Binary(std::sync::Arc::new(data)))
-    });
-    Ok(())
-}
-
-#[cfg(feature = "diskfonts")]
-pub fn register_font_from_path(path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
-    let requested_path = path.canonicalize().unwrap_or_else(|_| path.to_owned());
-    FONT_CACHE.with(|cache| {
-        for face_info in cache.borrow().available_fonts.faces() {
-            match &face_info.source {
-                fontdb::Source::Binary(_) => {}
-                fontdb::Source::File(loaded_path) | fontdb::Source::SharedFile(loaded_path, ..) => {
-                    if *loaded_path == requested_path {
-                        return Ok(());
-                    }
-                }
-            }
-        }
-
-        cache.borrow_mut().available_fonts.load_font_file(requested_path).map_err(|e| e.into())
-    })
-}
-
-#[cfg(not(feature = "diskfonts"))]
-pub fn register_font_from_path(_path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
-    return Err(std::io::Error::new(
-        std::io::ErrorKind::Other,
-        "Registering fonts from paths is not supported in builds without the diskfonts feature (like WASM)",
-    )
-    .into());
-}
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct FontCacheKey {
     family: SharedString,
-    weight: i32,
+    weight: fontdb::Weight,
 }
 
 #[derive(Clone)]
@@ -133,6 +81,14 @@ impl Font {
         }
         euclid::size2(width, lines as f32 * font_metrics.height())
     }
+
+    pub fn height(&self) -> PhysicalLength {
+        let mut paint = femtovg::Paint::default();
+        // These are the only two properties measure_font() needs
+        paint.set_font(&self.fonts);
+        paint.set_font_size(self.pixel_size.get());
+        PhysicalLength::new(self.text_context.measure_font(&paint).unwrap().height())
+    }
 }
 
 pub(crate) fn text_size(
@@ -184,74 +140,19 @@ pub struct FontCache {
     // coverage of the font.
     loaded_font_coverage: HashMap<fontdb::ID, GlyphCoverage>,
     pub(crate) text_context: TextContext,
-    pub(crate) available_fonts: fontdb::Database,
     available_families: HashSet<SharedString>,
-    #[cfg(all(
-        not(any(
-            target_family = "windows",
-            target_os = "macos",
-            target_os = "ios",
-            target_arch = "wasm32"
-        )),
-        feature = "fontconfig"
-    ))]
-    fontconfig_fallback_families: Vec<SharedString>,
 }
 
 impl Default for FontCache {
     fn default() -> Self {
-        let mut font_db = fontdb::Database::new();
-
-        #[cfg(all(
-            not(any(
-                target_family = "windows",
-                target_os = "macos",
-                target_os = "ios",
-                target_arch = "wasm32"
-            )),
-            feature = "fontconfig"
-        ))]
-        let mut fontconfig_fallback_families;
-
-        #[cfg(not(feature = "diskfonts"))]
-        {
-            let data = include_bytes!("fonts/DejaVuSans.ttf");
-            font_db.load_font_data(data.to_vec());
-            font_db.set_sans_serif_family("DejaVu Sans");
-        }
-        #[cfg(feature = "diskfonts")]
-        {
-            font_db.load_system_fonts();
-            cfg_if::cfg_if! {
-                if #[cfg(all(
-                    not(any(
-                        target_family = "windows",
-                        target_os = "macos",
-                        target_os = "ios",
-                        target_arch = "wasm32"
-                    )),
-                    feature = "fontconfig"
-                ))] {
-                    let default_sans_serif_family = {
-                        fontconfig_fallback_families = fontconfig::find_families("sans-serif")
-                            .into_iter()
-                            .map(|s| s.into())
-                            .collect::<Vec<SharedString>>();
-                        fontconfig_fallback_families.remove(0)
-                    };
-                } else {
-                    let default_sans_serif_family = "Arial";
-                }
-            }
-            font_db.set_sans_serif_family(default_sans_serif_family);
-        }
-        let available_families = font_db
-            .faces()
-            .iter()
-            .filter_map(|face_info| {
-                face_info.families.first().map(|(family_name, _)| family_name.as_str().into())
-            })
-            .collect();
+        let available_families = sharedfontdb::FONT_DB.with(|db| {
+            db.borrow()
+                .faces()
+                .filter_map(|face_info| {
+                    face_info.families.first().map(|(family_name, _)| family_name.as_str().into())
+                })
+                .collect()
+        });
 
         let text_context = TextContext::default();
         text_context.resize_shaped_words_cache(NonZeroUsize::new(10_000_000).unwrap());
@@ -261,18 +162,7 @@ impl Default for FontCache {
             loaded_fonts: HashMap::new(),
             loaded_font_coverage: HashMap::new(),
             text_context,
-            available_fonts: font_db,
             available_families,
-            #[cfg(all(
-                not(any(
-                    target_family = "windows",
-                    target_os = "macos",
-                    target_os = "ios",
-                    target_arch = "wasm32"
-                )),
-                feature = "fontconfig"
-            ))]
-            fontconfig_fallback_families,
         }
     }
 }
@@ -282,35 +172,31 @@ thread_local! {
 }
 
 impl FontCache {
-    fn load_single_font(&mut self, family: Option<&SharedString>, weight: i32) -> LoadedFont {
+    fn load_single_font(
+        &mut self,
+        family: Option<&SharedString>,
+        query: fontdb::Query<'_>,
+    ) -> LoadedFont {
         let text_context = self.text_context.clone();
-        let cache_key = FontCacheKey { family: family.cloned().unwrap_or_default(), weight };
+        let cache_key =
+            FontCacheKey { family: family.cloned().unwrap_or_default(), weight: query.weight };
 
         if let Some(loaded_font) = self.loaded_fonts.get(&cache_key) {
             return *loaded_font;
         }
 
-        let family = family
-            .as_ref()
-            .map_or(fontdb::Family::SansSerif, |family| fontdb::Family::Name(family));
-
         //let now = std::time::Instant::now();
-        let query = fontdb::Query {
-            families: &[family],
-            weight: fontdb::Weight(weight as u16),
-            ..Default::default()
-        };
 
-        let fontdb_face_id = self
-            .available_fonts
-            .query(&query)
-            .or_else(|| {
-                // If the requested family could not be found, fall back to *some* family that must exist
-                let mut fallback_query = query;
-                fallback_query.families = &[fontdb::Family::SansSerif];
-                self.available_fonts.query(&fallback_query)
-            })
-            .expect("there must be a sans-serif font face registered");
+        let fontdb_face_id = sharedfontdb::FONT_DB.with(|db| {
+            let db = db.borrow();
+
+            db.query_with_family(query, family.map(|s| s.as_str()))
+                .or_else(|| {
+                    // If the requested family could not be found, fall back to *some* family that must exist
+                    db.query_with_family(query, None)
+                })
+                .expect("there must be a sans-serif font face registered")
+        });
 
         // Safety: We map font files into memory that - while we never unmap them - may
         // theoretically get corrupted/truncated by another process and then we'll crash
@@ -319,26 +205,29 @@ impl FontCache {
         // replacing files. Unlinking OTOH is safe and doesn't destroy the file mapping,
         // the backing file becomes an orphan in a special area of the file system. That works
         // on Unixy platforms and on Windows the default file flags prevent the deletion.
-        #[cfg(feature = "diskfonts")]
+        #[cfg(not(target_arch = "wasm32"))]
         let (shared_data, face_index) = unsafe {
-            self.available_fonts.make_shared_face_data(fontdb_face_id).expect("unable to mmap font")
-        };
-        #[cfg(not(feature = "diskfonts"))]
-        let (shared_data, face_index) = self
-            .available_fonts
-            .face_source(fontdb_face_id)
-            .map(|(source, face_index)| {
-                (
-                    match source {
-                        fontdb::Source::Binary(data) => data.clone(),
-                        // We feed only Source::Binary into fontdb on wasm
-                        #[allow(unreachable_patterns)]
-                        _ => unreachable!(),
-                    },
-                    face_index,
-                )
+            sharedfontdb::FONT_DB.with(|db| {
+                db.borrow_mut().make_shared_face_data(fontdb_face_id).expect("unable to mmap font")
             })
-            .expect("invalid fontdb face id");
+        };
+        #[cfg(target_arch = "wasm32")]
+        let (shared_data, face_index) = crate::sharedfontdb::FONT_DB.with(|db| {
+            db.borrow()
+                .face_source(fontdb_face_id)
+                .map(|(source, face_index)| {
+                    (
+                        match source {
+                            fontdb::Source::Binary(data) => data.clone(),
+                            // We feed only Source::Binary into fontdb on wasm
+                            #[allow(unreachable_patterns)]
+                            _ => unreachable!(),
+                        },
+                        face_index,
+                    )
+                })
+                .expect("invalid fontdb face id")
+        });
 
         let femtovg_font_id = text_context
             .add_shared_font_with_index(SharedFontData(shared_data), face_index)
@@ -357,9 +246,10 @@ impl FontCache {
         reference_text: &str,
     ) -> Font {
         let pixel_size = font_request.pixel_size.unwrap_or(DEFAULT_FONT_SIZE) * scale_factor;
-        let weight = font_request.weight.unwrap_or(DEFAULT_FONT_WEIGHT);
 
-        let primary_font = self.load_single_font(font_request.family.as_ref(), weight);
+        let query = font_request.to_fontdb_query();
+
+        let primary_font = self.load_single_font(font_request.family.as_ref(), query);
 
         use unicode_script::{Script, UnicodeScript};
         // map from required script to sample character
@@ -406,7 +296,7 @@ impl FontCache {
                     return None;
                 }
 
-                let fallback_font = self.load_single_font(Some(fallback_family), weight);
+                let fallback_font = self.load_single_font(Some(fallback_family), query);
 
                 coverage_result = self.check_and_update_script_coverage(
                     &mut scripts_required,
@@ -449,8 +339,8 @@ impl FontCache {
             &core_foundation::array::CFArray::from_CFTypes(&[]),
         )
         .iter()
-        .map(|fallback_descriptor| fallback_descriptor.family_name().into())
-        .filter(|family| self.is_known_family(family))
+        .map(|fallback_descriptor| SharedString::from(fallback_descriptor.family_name()))
+        .filter(|family| self.is_known_family(&family))
         .collect::<Vec<_>>()
     }
 
@@ -477,10 +367,7 @@ impl FontCache {
         // `text_position`, by returning the count.
         struct TextAnalysisHack(u32);
         impl dwrote::TextAnalysisSourceMethods for TextAnalysisHack {
-            fn get_locale_name<'a>(
-                &'a self,
-                text_position: u32,
-            ) -> (std::borrow::Cow<'a, str>, u32) {
+            fn get_locale_name(&self, text_position: u32) -> (std::borrow::Cow<'_, str>, u32) {
                 ("".into(), self.0 - text_position)
             }
 
@@ -519,7 +406,7 @@ impl FontCache {
             );
 
             if let Some(fallback_font) = fallback_result.mapped_font {
-                let family = fallback_font.family_name().into();
+                let family: SharedString = fallback_font.family_name().into();
                 if self.is_known_family(&family) {
                     fallback_fonts.push(family)
                 }
@@ -533,15 +420,12 @@ impl FontCache {
         fallback_fonts
     }
 
-    #[cfg(all(
-        not(any(
-            target_family = "windows",
-            target_os = "macos",
-            target_os = "ios",
-            target_arch = "wasm32"
-        )),
-        feature = "fontconfig"
-    ))]
+    #[cfg(not(any(
+        target_family = "windows",
+        target_os = "macos",
+        target_os = "ios",
+        target_arch = "wasm32"
+    )))]
     fn font_fallbacks_for_request(
         &self,
         _family: Option<&SharedString>,
@@ -549,14 +433,18 @@ impl FontCache {
         _primary_font: &LoadedFont,
         _reference_text: &str,
     ) -> Vec<SharedString> {
-        self.fontconfig_fallback_families
-            .iter()
-            .filter(|family_name| self.is_known_family(family_name))
-            .cloned()
-            .collect()
+        sharedfontdb::FONT_DB.with(|db| {
+            db.borrow()
+                .fontconfig_fallback_families
+                .iter()
+                .filter_map(|family_name| {
+                    self.is_known_family(family_name).then(|| family_name.into())
+                })
+                .collect()
+        })
     }
 
-    #[cfg(not(feature = "diskfonts"))]
+    #[cfg(target_arch = "wasm32")]
     fn font_fallbacks_for_request(
         &self,
         _family: Option<&SharedString>,
@@ -564,14 +452,14 @@ impl FontCache {
         _primary_font: &LoadedFont,
         _reference_text: &str,
     ) -> Vec<SharedString> {
-        ["DejaVu Sans".into()]
+        [SharedString::from("DejaVu Sans")]
             .iter()
-            .filter(|family_name| self.is_known_family(family_name))
+            .filter(|family_name| self.is_known_family(&family_name))
             .cloned()
             .collect()
     }
 
-    fn is_known_family(&self, family: &SharedString) -> bool {
+    fn is_known_family(&self, family: &str) -> bool {
         self.available_families.contains(family)
     }
 
@@ -614,27 +502,29 @@ impl FontCache {
         });
 
         if !scripts_that_need_checking.is_empty() || !chars_that_need_checking.is_empty() {
-            self.available_fonts.with_face_data(face_id, |face_data, face_index| {
-                let face = ttf_parser::Face::parse(face_data, face_index).unwrap();
+            sharedfontdb::FONT_DB.with(|db| {
+                db.borrow().with_face_data(face_id, |face_data, face_index| {
+                    let face = ttf_parser::Face::parse(face_data, face_index).unwrap();
 
-                for (unchecked_script, sample_char) in scripts_that_need_checking {
-                    let glyph_coverage = face.glyph_index(sample_char).is_some();
-                    coverage.supported_scripts.insert(unchecked_script, glyph_coverage);
+                    for (unchecked_script, sample_char) in scripts_that_need_checking {
+                        let glyph_coverage = face.glyph_index(sample_char).is_some();
+                        coverage.supported_scripts.insert(unchecked_script, glyph_coverage);
 
-                    if glyph_coverage {
-                        scripts_without_coverage.remove(&unchecked_script);
+                        if glyph_coverage {
+                            scripts_without_coverage.remove(&unchecked_script);
+                        }
                     }
-                }
 
-                for unchecked_char in chars_that_need_checking {
-                    let glyph_coverage = face.glyph_index(unchecked_char).is_some();
-                    coverage.exact_glyph_coverage.insert(unchecked_char, glyph_coverage);
+                    for unchecked_char in chars_that_need_checking {
+                        let glyph_coverage = face.glyph_index(unchecked_char).is_some();
+                        coverage.exact_glyph_coverage.insert(unchecked_char, glyph_coverage);
 
-                    if glyph_coverage {
-                        chars_without_coverage.remove(&unchecked_char);
+                        if glyph_coverage {
+                            chars_without_coverage.remove(&unchecked_char);
+                        }
                     }
-                }
-            });
+                });
+            })
         }
 
         let remaining_required_script_coverage = scripts_without_coverage.len();

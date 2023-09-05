@@ -1,5 +1,5 @@
-# Copyright © SixtyFPS GmbH <info@slint-ui.com>
-# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+# Copyright © SixtyFPS GmbH <info@slint.dev>
+# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 name: Embedded Build
 
@@ -8,7 +8,7 @@ on:
 
 jobs:
   build_containers:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     strategy:
       matrix:
         target:
@@ -48,7 +48,7 @@ jobs:
 
   build_demos:
     needs: [build_containers]
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     strategy:
       matrix:
         target:
@@ -63,7 +63,7 @@ jobs:
     - name: Enable Skia build
       if: matrix.target != 'riscv64gc-unknown-linux-gnu'
       run: |
-          echo "EXTRA_ARGS=--features slint/renderer-winit-skia" >> $GITHUB_ENV
+          echo "EXTRA_ARGS=--features slint/renderer-skia" >> $GITHUB_ENV
     - uses: baptiste0928/cargo-install@v2
       with:
         crate: cross

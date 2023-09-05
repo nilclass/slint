@@ -1,23 +1,23 @@
-# Copyright © SixtyFPS GmbH <info@slint-ui.com>
-# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+# Copyright © SixtyFPS GmbH <info@slint.dev>
+# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 [package]
 name = "test-driver-interpreter"
-version = "1.0.3"
-authors = ["Slint Developers <info@slint-ui.com>"]
+version = "1.2.0"
+authors = ["Slint Developers <info@slint.dev>"]
 edition = "2021"
 publish = false
-license = "GPL-3.0-only OR LicenseRef-Slint-commercial"
+license = "GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial"
 
 [[bin]]
 path = "main.rs"
 name = "test-driver-interpreter"
 
 [dev-dependencies]
-slint-interpreter = { path = "../../../internal/interpreter", default-features = false, features = ["display-diagnostics", "compat-1-0"] }
+slint-interpreter = { path = "../../../internal/interpreter", default-features = false, features = ["display-diagnostics", "compat-1-2"] }
 i-slint-backend-testing = { path = "../../../internal/backends/testing" }
 
-itertools = "0.10"
+itertools = "0.11"
 lazy_static = "1.4.0"
 spin_on = "0.1"
 test_driver_lib = { path = "../driverlib" }

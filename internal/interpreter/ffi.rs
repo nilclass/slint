@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 use crate::dynamic_component::ErasedComponentBox;
 
@@ -153,7 +153,7 @@ pub extern "C" fn slint_interpreter_value_to_bool(val: &ValueOpaque) -> Option<&
     }
 }
 
-/// Extracts a SharedVector<ValueOpaque> out of the given value `val`, writes that into the
+/// Extracts a `SharedVector<ValueOpaque>` out of the given value `val`, writes that into the
 /// `out` parameter and returns true; returns false if the value does not hold an extractable
 /// array.
 #[no_mangle]
@@ -192,10 +192,10 @@ pub extern "C" fn slint_interpreter_value_to_brush(val: &ValueOpaque) -> Option<
 }
 
 #[no_mangle]
-pub extern "C" fn slint_interpreter_value_to_struct(val: &ValueOpaque) -> Option<&StructOpaque> {
+pub extern "C" fn slint_interpreter_value_to_struct(val: &ValueOpaque) -> *const StructOpaque {
     match val.as_value() {
-        Value::Struct(s) => Some(unsafe { std::mem::transmute::<&Struct, &StructOpaque>(s) }),
-        _ => None,
+        Value::Struct(s) => s as *const Struct as *const StructOpaque,
+        _ => std::ptr::null(),
     }
 }
 
@@ -212,9 +212,9 @@ pub extern "C" fn slint_interpreter_value_to_image(val: &ValueOpaque) -> Option<
 pub struct StructOpaque([usize; 6]);
 #[repr(C)]
 #[cfg(target_pointer_width = "32")]
-pub struct StructOpaque([usize; 8]);
-/// Asserts that StructOpaque is at least as large as Struct, otherwise this would overflow
-const _: usize = std::mem::size_of::<StructOpaque>() - std::mem::size_of::<Struct>();
+pub struct StructOpaque([u64; 4]);
+const _: [(); std::mem::size_of::<StructOpaque>()] = [(); std::mem::size_of::<Struct>()];
+const _: [(); std::mem::align_of::<StructOpaque>()] = [(); std::mem::align_of::<Struct>()];
 
 impl StructOpaque {
     fn as_struct(&self) -> &Struct {
@@ -271,8 +271,10 @@ pub extern "C" fn slint_interpreter_struct_set_field<'a>(
 type StructIterator<'a> = std::collections::hash_map::Iter<'a, String, Value>;
 #[repr(C)]
 pub struct StructIteratorOpaque<'a>([usize; 5], std::marker::PhantomData<StructIterator<'a>>);
-const _: usize =
-    std::mem::size_of::<StructIteratorOpaque>() - std::mem::size_of::<StructIterator>();
+const _: [(); std::mem::size_of::<StructIteratorOpaque>()] =
+    [(); std::mem::size_of::<StructIterator>()];
+const _: [(); std::mem::align_of::<StructIteratorOpaque>()] =
+    [(); std::mem::align_of::<StructIterator>()];
 
 #[no_mangle]
 pub unsafe extern "C" fn slint_interpreter_struct_iterator_destructor(
@@ -559,10 +561,9 @@ pub extern "C" fn slint_interpreter_component_instance_show(
 ) {
     generativity::make_guard!(guard);
     let comp = inst.unerase(guard);
-    if is_visible {
-        comp.borrow_instance().window_adapter().show().unwrap();
-    } else {
-        comp.borrow_instance().window_adapter().hide().unwrap();
+    match is_visible {
+        true => comp.borrow_instance().window_adapter().window().show().unwrap(),
+        false => comp.borrow_instance().window_adapter().window().hide().unwrap(),
     }
 }
 
@@ -579,7 +580,10 @@ pub unsafe extern "C" fn slint_interpreter_component_instance_window(
         core::mem::size_of::<Rc<dyn WindowAdapter>>(),
         core::mem::size_of::<i_slint_core::window::ffi::WindowAdapterRcOpaque>()
     );
-    core::ptr::write(out as *mut *const Rc<dyn WindowAdapter>, inst.window_adapter() as *const _)
+    core::ptr::write(
+        out as *mut *const Rc<dyn WindowAdapter>,
+        inst.window_adapter_ref().unwrap() as *const _,
+    )
 }
 
 /// Instantiate an instance from a definition.
@@ -642,6 +646,7 @@ pub struct ModelNotifyOpaque([usize; 8]);
 pub struct ModelNotifyOpaque([usize; 12]);
 /// Asserts that ModelNotifyOpaque is at least as large as ModelNotify, otherwise this would overflow
 const _: usize = std::mem::size_of::<ModelNotifyOpaque>() - std::mem::size_of::<ModelNotify>();
+const _: usize = std::mem::align_of::<ModelNotifyOpaque>() - std::mem::align_of::<ModelNotify>();
 
 impl ModelNotifyOpaque {
     fn as_model_notify(&self) -> &ModelNotify {
@@ -696,7 +701,7 @@ pub unsafe extern "C" fn slint_interpreter_model_notify_row_removed(
 // FIXME: Figure out how to re-export the one from compilerlib
 /// DiagnosticLevel describes the severity of a diagnostic.
 #[derive(Clone)]
-#[repr(C)]
+#[repr(u8)]
 pub enum DiagnosticLevel {
     /// The diagnostic belongs to an error.
     Error,
@@ -722,29 +727,17 @@ pub struct Diagnostic {
     level: DiagnosticLevel,
 }
 
-#[repr(C)]
-#[cfg(target_pointer_width = "64")]
-pub struct ComponentCompilerOpaque([usize; 13]);
-
-#[repr(C)]
-#[cfg(target_pointer_width = "32")]
-#[repr(align(8))]
-pub struct ComponentCompilerOpaque([usize; 16]);
-
-/// Asserts that ComponentCompilerOpaque is as large as ComponentCompiler and has the same alignment, to make transmute safe.
-const _: [(); std::mem::size_of::<ComponentCompilerOpaque>()] =
-    [(); std::mem::size_of::<ComponentCompiler>()];
-const _: [(); std::mem::align_of::<ComponentCompilerOpaque>()] =
-    [(); std::mem::align_of::<ComponentCompiler>()];
+#[repr(transparent)]
+pub struct ComponentCompilerOpaque(NonNull<ComponentCompiler>);
 
 impl ComponentCompilerOpaque {
     fn as_component_compiler(&self) -> &ComponentCompiler {
         // Safety: there should be no way to construct a ComponentCompilerOpaque without it holding an actual ComponentCompiler
-        unsafe { std::mem::transmute::<&ComponentCompilerOpaque, &ComponentCompiler>(self) }
+        unsafe { self.0.as_ref() }
     }
     fn as_component_compiler_mut(&mut self) -> &mut ComponentCompiler {
         // Safety: there should be no way to construct a ComponentCompilerOpaque without it holding an actual ComponentCompiler
-        unsafe { std::mem::transmute::<&mut ComponentCompilerOpaque, &mut ComponentCompiler>(self) }
+        unsafe { self.0.as_mut() }
     }
 }
 
@@ -752,14 +745,16 @@ impl ComponentCompilerOpaque {
 pub unsafe extern "C" fn slint_interpreter_component_compiler_new(
     compiler: *mut ComponentCompilerOpaque,
 ) {
-    std::ptr::write(compiler as *mut ComponentCompiler, ComponentCompiler::default())
+    *compiler = ComponentCompilerOpaque(NonNull::new_unchecked(Box::into_raw(Box::new(
+        ComponentCompiler::default(),
+    ))));
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn slint_interpreter_component_compiler_destructor(
     compiler: *mut ComponentCompilerOpaque,
 ) {
-    drop(std::ptr::read(compiler as *mut ComponentCompiler))
+    drop(Box::from_raw((*compiler).0.as_ptr()))
 }
 
 #[no_mangle]

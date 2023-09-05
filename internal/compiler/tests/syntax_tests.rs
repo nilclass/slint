@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 //! This test is trying to compile all the *.slint files in the sub directories and check that compilation
 //! errors are properly reported
@@ -55,7 +55,7 @@ fn syntax_tests() -> std::io::Result<()> {
         .try_fold(
             || true,
             |mut success, path| {
-                success &= process_file(&path)?;
+                success &= process_file(path)?;
                 Ok::<bool, std::io::Error>(success)
             },
         )
@@ -67,7 +67,7 @@ fn syntax_tests() -> std::io::Result<()> {
 }
 
 fn process_file(path: &std::path::Path) -> std::io::Result<bool> {
-    let source = std::fs::read_to_string(&path)?;
+    let source = std::fs::read_to_string(path)?;
     std::panic::catch_unwind(|| process_file_source(path, source, false)).unwrap_or_else(|err| {
         println!("Panic while processing {}: {:?}", path.display(), err);
         Ok(false)
@@ -189,6 +189,7 @@ fn process_file_source(
     let mut compiler_config = i_slint_compiler::CompilerConfiguration::new(
         i_slint_compiler::generator::OutputFormat::Interpreter,
     );
+    compiler_config.enable_component_containers = true;
     compiler_config.style = Some("fluent".into());
     let compile_diagnostics = if !parse_diagnostics.has_error() {
         let (_, build_diags) = spin_on::spin_on(i_slint_compiler::compile_syntax_node(
@@ -206,7 +207,7 @@ fn process_file_source(
 
     for p in &compile_diagnostics.all_loaded_files {
         let source = if p.is_absolute() {
-            std::fs::read_to_string(&p)?
+            std::fs::read_to_string(p)?
         } else {
             // probably std-widgets.slint
             String::new()

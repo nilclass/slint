@@ -1,11 +1,13 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 /*!
 The module responsible for the code generation.
 
 There is one sub module for every language
 */
+
+// cSpell: ignore deque subcomponent
 
 use std::collections::{BTreeSet, HashSet, VecDeque};
 use std::rc::{Rc, Weak};
@@ -52,7 +54,7 @@ impl std::str::FromStr for OutputFormat {
             #[cfg(feature = "rust")]
             "rust" => Ok(Self::Rust),
             "llr" => Ok(Self::Llr),
-            _ => Err(format!("Unknown outpout format {}", s)),
+            _ => Err(format!("Unknown output format {}", s)),
         }
     }
 }
@@ -88,11 +90,10 @@ pub fn generate(
             )); // Perhaps byte code in the future?
         }
         OutputFormat::Llr => {
-            writeln!(
-                destination,
-                "{:#?}",
-                crate::llr::lower_to_item_tree::lower_to_item_tree(&doc.root_component)
-            )?;
+            let root = crate::llr::lower_to_item_tree::lower_to_item_tree(&doc.root_component);
+            let mut output = String::new();
+            crate::llr::pretty_print::pretty_print(&root, &mut output).unwrap();
+            write!(destination, "{output}")?;
         }
     }
     Ok(())
@@ -108,6 +109,12 @@ pub trait ItemTreeBuilder {
         &mut self,
         item: &crate::object_tree::ElementRc,
         repeater_count: u32,
+        parent_index: u32,
+        component_state: &Self::SubComponentState,
+    );
+    fn push_component_placeholder_item(
+        &mut self,
+        item: &crate::object_tree::ElementRc,
         parent_index: u32,
         component_state: &Self::SubComponentState,
     );
@@ -189,7 +196,7 @@ pub fn build_item_tree<T: ItemTreeBuilder>(
     fn visit_children<T: ItemTreeBuilder>(
         state: &T::SubComponentState,
         children: &[ElementRc],
-        component: &Rc<Component>,
+        _component: &Rc<Component>,
         parent_item: &ElementRc,
         parent_index: u32,
         relative_parent_index: u32,
@@ -288,7 +295,7 @@ pub fn build_item_tree<T: ItemTreeBuilder>(
                 visit_children(
                     state,
                     &e.borrow().children,
-                    component,
+                    _component,
                     e,
                     index,
                     relative_index,
@@ -315,7 +322,9 @@ pub fn build_item_tree<T: ItemTreeBuilder>(
         parent_index: u32,
         builder: &mut T,
     ) {
-        if item.borrow().repeated.is_some() {
+        if item.borrow().is_component_placeholder {
+            builder.push_component_placeholder_item(item, parent_index, component_state);
+        } else if item.borrow().repeated.is_some() {
             builder.push_repeated_item(item, *repeater_count, parent_index, component_state);
             *repeater_count += 1;
         } else {
@@ -353,6 +362,9 @@ pub fn handle_property_bindings_init(
         handle_property: &mut impl FnMut(&ElementRc, &str, &BindingExpression),
         processed: &mut HashSet<NamedReference>,
     ) {
+        if elem.borrow().is_component_placeholder {
+            return; // This element does not really exist!
+        }
         let nr = NamedReference::new(elem, prop_name);
         if processed.contains(&nr) {
             return;
@@ -401,7 +413,7 @@ pub fn handle_property_bindings_init(
 /// `set_constant` on it.
 pub fn for_each_const_properties(component: &Rc<Component>, mut f: impl FnMut(&ElementRc, &str)) {
     crate::object_tree::recurse_elem(&component.root_element, &(), &mut |elem: &ElementRc, ()| {
-        if elem.borrow().repeated.is_some() {
+        if elem.borrow().repeated.is_some() || elem.borrow().is_component_placeholder {
             return;
         }
         let mut e = elem.clone();

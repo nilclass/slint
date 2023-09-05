@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 // cSpell: ignore vecmodel
 
@@ -7,11 +7,12 @@
 
 use crate::component::ComponentVTable;
 use crate::item_tree::TraversalOrder;
-use crate::items::{ItemRef, SortOrder};
+use crate::items::ItemRef;
+pub use crate::items::{StandardListViewItem, TableColumn};
 use crate::layout::Orientation;
 use crate::lengths::{LogicalLength, RectLengths};
 use crate::{Coord, Property, SharedString, SharedVector};
-pub use adapters::{FilterModel, MapModel, SortModel};
+pub use adapters::{FilterModel, MapModel, ReverseModel, SortModel};
 use alloc::boxed::Box;
 use alloc::rc::Rc;
 use alloc::vec::Vec;
@@ -235,6 +236,15 @@ pub trait ModelExt: Model {
         F: FnMut(&Self::Data, &Self::Data) -> core::cmp::Ordering + 'static,
     {
         SortModel::new(self, sort_function)
+    }
+
+    /// Returns a new Model where the elements are reversed.
+    /// This is a shortcut for [`ReverseModel::new()`].
+    fn reverse(self) -> ReverseModel<Self>
+    where
+        Self: Sized + 'static,
+    {
+        ReverseModel::new(self)
     }
 }
 
@@ -467,7 +477,7 @@ impl Model for usize {
     }
 
     fn row_data(&self, row: usize) -> Option<Self::Data> {
-        (row < self.row_count()).then(|| row as i32)
+        (row < self.row_count()).then_some(row as i32)
     }
 
     fn as_any(&self) -> &dyn core::any::Any {
@@ -491,7 +501,7 @@ impl Model for bool {
     }
 
     fn row_data(&self, row: usize) -> Option<Self::Data> {
-        (row < self.row_count()).then(|| ())
+        (row < self.row_count()).then_some(())
     }
 
     fn as_any(&self) -> &dyn core::any::Any {
@@ -503,18 +513,34 @@ impl Model for bool {
     }
 }
 
-/// A Reference counted [`Model`].
+/// ModelRc is a type wrapper for a reference counted implementation of the [`Model`] trait.
 ///
-/// The `ModelRc` struct holds something that implements the [`Model`] trait.
-/// This is used in `for` expressions in the .slint language.
-/// Array properties in the .slint language are holding a ModelRc.
+/// Models are used to represent sequences of the same data type. In `.slint` code those
+/// are represented using the `[T]` array syntax and typically used in `for` expressions,
+/// array properties, and array struct fields.
+///
 /// For example, a `property <[string]> foo` will be of type `ModelRc<SharedString>`
 /// and, behind the scenes, wraps a `Rc<dyn Model<Data = SharedString>>.`
 ///
-/// An empty model can be constructed with [`ModelRc::default()`].
-/// Use [`ModelRc::new()`] To construct a ModelRc from something that implements the
-/// [`Model`] trait.
-/// It is also possible to use the [`From`] trait to convert from `Rc<dyn Model>`.
+/// An array struct field will also be of type `ModelRc`:
+///
+/// ```slint,no-preview
+/// export struct AddressBook {
+///     names: [string]
+/// }
+/// ```
+///
+/// When accessing `Addressbook` from Rust, the `names` field will be of type `ModelRc<SharedString>`.
+///
+/// There are several ways of constructing a ModelRc in Rust:
+///
+/// * An empty ModelRc can be constructed with [`ModelRc::default()`].
+/// * A `ModelRc` can be constructed from a slice or an array using the [`From`] trait.
+///   This allocates a [`VecModel`].
+/// * Use [`ModelRc::new()`] to construct a `ModelRc` from a type that implements the
+///   [`Model`] trait, such as [`VecModel`] or your own implementation.
+/// * If you have your model already in an `Rc`, then you can use the [`From`] trait
+///   to convert from `Rc<dyn Model<Data = T>>` to `ModelRc`.
 ///
 /// ## Example
 ///
@@ -609,6 +635,18 @@ impl<T, M: Model<Data = T> + 'static> From<Rc<M>> for ModelRc<T> {
 impl<T> From<Rc<dyn Model<Data = T> + 'static>> for ModelRc<T> {
     fn from(model: Rc<dyn Model<Data = T> + 'static>) -> Self {
         Self(Some(model))
+    }
+}
+
+impl<T: Clone + 'static> From<&[T]> for ModelRc<T> {
+    fn from(slice: &[T]) -> Self {
+        VecModel::from_slice(slice)
+    }
+}
+
+impl<T: Clone + 'static, const N: usize> From<[T; N]> for ModelRc<T> {
+    fn from(array: [T; N]) -> Self {
+        VecModel::from_slice(&array)
     }
 }
 
@@ -882,7 +920,7 @@ impl<C: RepeatedComponent + 'static> Repeater<C> {
         any_items_created
     }
 
-    /// Same as `Self::ensuer_updated` but for a ListView
+    /// Same as `Self::ensure_updated` but for a ListView
     pub fn ensure_updated_listview(
         self: Pin<&Self>,
         init: impl Fn() -> ComponentRc<C>,
@@ -947,6 +985,10 @@ impl<C: RepeatedComponent + 'static> Repeater<C> {
 
         let data = self.data();
         let mut inner = data.inner.borrow_mut();
+        if inner.offset >= row_count {
+            inner.offset = row_count - 1;
+        }
+
         let one_and_a_half_screen = listview_height * 3 as Coord / 2 as Coord;
         let first_item_y = inner.anchor_y;
         let last_item_bottom = first_item_y + element_height * inner.components.len() as Coord;
@@ -1170,16 +1212,6 @@ impl<C: RepeatedComponent + 'static> Repeater<C> {
     }
 }
 
-/// Represents an item in a StandardListView and a StandardTableView. This is the Rust/C++ type for
-/// the StandardListViewItem type in Slint files, when declaring for example a `property <[StandardListViewItem]> my-list-view-model;`.
-#[repr(C)]
-#[derive(Clone, Default, Debug, PartialEq)]
-#[non_exhaustive]
-pub struct StandardListViewItem {
-    /// The text content of the item.
-    pub text: SharedString,
-}
-
 impl From<SharedString> for StandardListViewItem {
     fn from(value: SharedString) -> Self {
         StandardListViewItem { text: value }
@@ -1190,27 +1222,6 @@ impl From<&str> for StandardListViewItem {
     fn from(value: &str) -> Self {
         StandardListViewItem { text: value.into() }
     }
-}
-
-/// Represent an TableColumn header
-#[repr(C)]
-#[derive(Clone, Default, Debug, PartialEq)]
-#[non_exhaustive]
-pub struct TableColumn {
-    /// The title of the column header
-    pub title: SharedString,
-
-    /// The minimum column width (logical length)
-    pub min_width: Coord,
-
-    /// The horizontal column stretch
-    pub horizontal_stretch: f32,
-
-    /// Sorts the column
-    pub sort_order: SortOrder,
-
-    /// the actual width of the column (logical length)
-    pub width: Coord,
 }
 
 #[test]

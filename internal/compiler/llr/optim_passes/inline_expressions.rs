@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 //! Inline properties that are simple enough to be inlined
 //!
@@ -33,7 +33,7 @@ fn expression_cost(exp: &Expression, ctx: &EvaluationContext) -> isize {
         Expression::ArrayIndex { .. } => ARRAY_INDEX_COST,
         Expression::Cast { .. } => 0,
         Expression::CodeBlock(_) => 0,
-        Expression::BuiltinFunctionCall { function, .. } => builtin_function_cost(*function),
+        Expression::BuiltinFunctionCall { function, .. } => builtin_function_cost(function),
         Expression::CallBackCall { callback, .. } => callback_cost(callback, ctx),
         Expression::FunctionCall { function, .. } => callback_cost(function, ctx),
         Expression::ExtraBuiltinFunctionCall { .. } => return isize::MAX,
@@ -54,6 +54,7 @@ fn expression_cost(exp: &Expression, ctx: &EvaluationContext) -> isize {
         Expression::LayoutCacheAccess { .. } => PROPERTY_ACCESS_COST,
         Expression::BoxLayoutFunction { .. } => return isize::MAX,
         Expression::ComputeDialogLayoutCells { .. } => return isize::MAX,
+        Expression::MinMax { .. } => 10,
     };
 
     exp.visit(|e| cost = cost.saturating_add(expression_cost(e, ctx)));
@@ -66,7 +67,7 @@ fn callback_cost(_callback: &crate::llr::PropertyReference, _ctx: &EvaluationCon
     isize::MAX
 }
 
-fn builtin_function_cost(function: BuiltinFunction) -> isize {
+fn builtin_function_cost(function: &BuiltinFunction) -> isize {
     match function {
         BuiltinFunction::GetWindowScaleFactor => PROPERTY_ACCESS_COST,
         BuiltinFunction::GetWindowDefaultFontSize => PROPERTY_ACCESS_COST,
@@ -87,21 +88,27 @@ fn builtin_function_cost(function: BuiltinFunction) -> isize {
         BuiltinFunction::Log => 10,
         BuiltinFunction::Pow => 10,
         BuiltinFunction::SetFocusItem => isize::MAX,
-        BuiltinFunction::ShowPopupWindow => isize::MAX,
+        BuiltinFunction::ShowPopupWindow | BuiltinFunction::ClosePopupWindow => isize::MAX,
+        BuiltinFunction::ItemMemberFunction(..) => isize::MAX,
         BuiltinFunction::StringToFloat => 50,
         BuiltinFunction::StringIsFloat => 50,
         BuiltinFunction::ColorBrighter => 50,
         BuiltinFunction::ColorDarker => 50,
+        BuiltinFunction::ColorTransparentize => 50,
+        BuiltinFunction::ColorMix => 50,
+        BuiltinFunction::ColorWithAlpha => 50,
         BuiltinFunction::ImageSize => 50,
         BuiltinFunction::ArrayLength => 50,
         BuiltinFunction::Rgb => 50,
         BuiltinFunction::ImplicitLayoutInfo(_) => isize::MAX,
+        BuiltinFunction::ItemAbsolutePosition => isize::MAX,
         BuiltinFunction::RegisterCustomFontByPath => isize::MAX,
         BuiltinFunction::RegisterCustomFontByMemory => isize::MAX,
         BuiltinFunction::RegisterBitmapFont => isize::MAX,
         BuiltinFunction::DarkColorScheme => isize::MAX,
         BuiltinFunction::SetTextInputFocused => PROPERTY_ACCESS_COST,
         BuiltinFunction::TextInputFocused => PROPERTY_ACCESS_COST,
+        BuiltinFunction::Translate => 2 * ALLOC_COST + PROPERTY_ACCESS_COST,
     }
 }
 
@@ -195,7 +202,7 @@ pub(crate) fn property_binding_and_analysis<'a>(
             }
             _ => unreachable!(),
         }
-        return PropertyInfoResult { property_decl, ..Default::default() };
+        PropertyInfoResult { property_decl, ..Default::default() }
     }
 
     match prop {

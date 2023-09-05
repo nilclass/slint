@@ -1,25 +1,29 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 #![cfg(target_arch = "wasm32")]
 
-mod completion;
-mod goto;
-mod lsp_ext;
-mod properties;
-mod semantic_tokens;
-mod server_loop;
-mod util;
+mod common;
+mod language;
+pub mod lsp_ext;
+#[cfg(feature = "preview")]
+mod preview;
+pub mod util;
 
+use common::PreviewApi;
+use common::Result;
 use i_slint_compiler::CompilerConfiguration;
 use js_sys::Function;
+pub use language::{Context, DocumentCache, RequestHandler};
 use serde::Serialize;
-pub use server_loop::{Context, DocumentCache, Error, RequestHandler};
 use std::cell::RefCell;
 use std::future::Future;
 use std::io::ErrorKind;
+use std::path::PathBuf;
 use std::rc::Rc;
 use wasm_bindgen::prelude::*;
+
+type JsResult<T> = std::result::Result<T, JsError>;
 
 pub mod wasm_prelude {
     use std::path::{Path, PathBuf};
@@ -39,13 +43,51 @@ pub mod wasm_prelude {
     }
 }
 
+struct Previewer {
+    highlight_in_preview: Function,
+}
+
+impl PreviewApi for Previewer {
+    fn set_design_mode(&self, _enable: bool) {
+        // do nothing!
+    }
+
+    fn design_mode(&self) -> bool {
+        // do nothing!
+        false
+    }
+
+    fn set_contents(&self, _path: &std::path::Path, _contents: &str) {
+        // do nothing!
+    }
+
+    fn load_preview(
+        &self,
+        _component: common::PreviewComponent,
+        _behavior: common::PostLoadBehavior,
+    ) {
+        // do nothing!
+    }
+
+    fn config_changed(&self, _style: &str, _include_paths: &[PathBuf]) {
+        // do nothing!
+    }
+
+    fn highlight(&self, path: Option<std::path::PathBuf>, offset: u32) -> Result<()> {
+        self.highlight_in_preview
+            .call2(&JsValue::UNDEFINED, &to_value(&path.unwrap_or_default())?, &offset.into())
+            .map_err(|x| format!("{x:?}"))?;
+        Ok(())
+    }
+}
+
 #[derive(Clone)]
 pub struct ServerNotifier {
     send_notification: Function,
     send_request: Function,
 }
 impl ServerNotifier {
-    pub fn send_notification(&self, method: String, params: impl Serialize) -> Result<(), Error> {
+    pub fn send_notification(&self, method: String, params: impl Serialize) -> Result<()> {
         self.send_notification
             .call2(&JsValue::UNDEFINED, &method.into(), &to_value(&params)?)
             .map_err(|x| format!("Error calling send_notification: {x:?}"))?;
@@ -55,7 +97,7 @@ impl ServerNotifier {
     pub fn send_request<T: lsp_types::request::Request>(
         &self,
         request: T::Params,
-    ) -> Result<impl Future<Output = Result<T::Result, Error>>, Error> {
+    ) -> Result<impl Future<Output = Result<T::Result>>> {
         let promise = self
             .send_request
             .call2(&JsValue::UNDEFINED, &T::METHOD.into(), &to_value(&request)?)
@@ -67,24 +109,6 @@ impl ServerNotifier {
             })
         })
     }
-
-    pub async fn progress_reporter(
-        &self,
-        token: lsp_types::ProgressToken,
-        title: String,
-        message: Option<String>,
-        percentage: Option<u32>,
-        cancellable: Option<bool>,
-    ) -> Result<server_loop::ProgressReporter, Error> {
-        server_loop::ProgressReporter::new(
-            self.clone(),
-            token,
-            title,
-            message,
-            percentage,
-            cancellable,
-        )
-    }
 }
 
 impl RequestHandler {
@@ -93,7 +117,7 @@ impl RequestHandler {
         method: String,
         params: JsValue,
         ctx: Rc<Context>,
-    ) -> Result<JsValue, Error> {
+    ) -> Result<JsValue> {
         if let Some(f) = self.0.get(&method.as_str()) {
             let param = serde_wasm_bindgen::from_value(params)
                 .map_err(|x| format!("invalid param to handle_request: {x:?}"))?;
@@ -182,7 +206,7 @@ pub fn create(
     send_request: SendRequestFunction,
     load_file: ImportCallbackFunction,
     highlight_in_preview: HighlightInPreviewFunction,
-) -> Result<SlintServer, JsError> {
+) -> JsResult<SlintServer> {
     console_error_panic_hook::set_once();
 
     let init_param = serde_wasm_bindgen::from_value(init_param)?;
@@ -196,33 +220,18 @@ pub fn create(
 
     let document_cache = RefCell::new(DocumentCache::new(compiler_config));
     let send_request = Function::from(send_request.clone());
-    let _highlight_in_preview = Function::from(highlight_in_preview.clone());
+    let highlight_in_preview = Function::from(highlight_in_preview.clone());
     let reentry_guard = Rc::new(RefCell::new(ReentryGuard::default()));
 
     let mut rh = RequestHandler::default();
-    server_loop::register_request_handlers(&mut rh);
+    language::register_request_handlers(&mut rh);
 
     Ok(SlintServer {
         ctx: Rc::new(Context {
             document_cache,
             init_param,
             server_notifier: ServerNotifier { send_notification, send_request },
-            #[cfg(feature = "preview-api")]
-            preview: server_loop::PreviewApi {
-                highlight: Box::new(
-                    #[allow(unused_variables)]
-                    move |ctx: &Rc<Context>, path: Option<std::path::PathBuf>, offset: u32| {
-                        _highlight_in_preview
-                            .call2(
-                                &JsValue::UNDEFINED,
-                                &to_value(&path.unwrap_or_default())?,
-                                &offset.into(),
-                            )
-                            .map_err(|x| std::io::Error::new(ErrorKind::Other, format!("{x:?}")))?;
-                        Ok(())
-                    },
-                ),
-            },
+            preview: Box::new(Previewer { highlight_in_preview }),
         }),
         reentry_guard,
         rh: Rc::new(rh),
@@ -232,8 +241,8 @@ pub fn create(
 #[wasm_bindgen]
 impl SlintServer {
     #[wasm_bindgen]
-    pub fn server_initialize_result(&self, cap: JsValue) -> Result<JsValue, JsError> {
-        Ok(to_value(&server_loop::server_initialize_result(&serde_wasm_bindgen::from_value(cap)?))?)
+    pub fn server_initialize_result(&self, cap: JsValue) -> JsResult<JsValue> {
+        Ok(to_value(&language::server_initialize_result(&serde_wasm_bindgen::from_value(cap)?))?)
     }
 
     #[wasm_bindgen]
@@ -243,8 +252,8 @@ impl SlintServer {
         wasm_bindgen_futures::future_to_promise(async move {
             let _lock = ReentryGuard::lock(guard).await;
             let uri: lsp_types::Url = serde_wasm_bindgen::from_value(uri)?;
-            server_loop::reload_document(
-                &ctx.server_notifier,
+            language::reload_document(
+                &ctx,
                 content,
                 uri.clone(),
                 version,
@@ -257,8 +266,8 @@ impl SlintServer {
     }
 
     /*  #[wasm_bindgen]
-    pub fn show_preview(&self, params: JsValue) -> Result<(), JsError> {
-        server_loop::show_preview_command(
+    pub fn show_preview(&self, params: JsValue) -> JsResult<()> {
+        language::show_preview_command(
             &serde_wasm_bindgen::from_value(params)?,
             &ServerNotifier,
             &mut self.0.borrow_mut(),
@@ -279,10 +288,10 @@ impl SlintServer {
     }
 
     #[wasm_bindgen]
-    pub async fn reload_config(&self) -> Result<(), JsError> {
+    pub async fn reload_config(&self) -> JsResult<()> {
         let guard = self.reentry_guard.clone();
         let _lock = ReentryGuard::lock(guard).await;
-        server_loop::load_configuration(&self.ctx).await.map_err(|e| JsError::new(&e.to_string()))
+        language::load_configuration(&self.ctx).await.map_err(|e| JsError::new(&e.to_string()))
     }
 }
 
@@ -299,6 +308,6 @@ async fn load_file(path: String, load_file: &Function) -> std::io::Result<String
 // Use a JSON friendly representation to avoid using ES maps instead of JS objects.
 fn to_value<T: serde::Serialize + ?Sized>(
     value: &T,
-) -> Result<wasm_bindgen::JsValue, serde_wasm_bindgen::Error> {
+) -> std::result::Result<wasm_bindgen::JsValue, serde_wasm_bindgen::Error> {
     value.serialize(&serde_wasm_bindgen::Serializer::json_compatible())
 }

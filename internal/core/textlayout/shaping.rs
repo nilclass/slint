@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 use alloc::vec::Vec;
 use core::ops::Range;
@@ -44,7 +44,8 @@ pub trait TextShaper {
         + euclid::num::Zero
         + euclid::num::One
         + core::convert::From<i16>
-        + Copy;
+        + Copy
+        + core::fmt::Debug;
     type Length: euclid::num::Zero
         + core::ops::AddAssign
         + core::ops::Add<Output = Self::Length>
@@ -54,7 +55,8 @@ pub trait TextShaper {
         + Copy
         + core::cmp::PartialOrd
         + core::ops::Mul<Self::LengthPrimitive, Output = Self::Length>
-        + core::ops::Div<Self::LengthPrimitive, Output = Self::Length>;
+        + core::ops::Div<Self::LengthPrimitive, Output = Self::Length>
+        + core::fmt::Debug;
     // Shapes the given string and emits the result into the given glyphs buffer.
     fn shape_text<GlyphStorage: core::iter::Extend<Glyph<Self::Length>>>(
         &self,
@@ -107,9 +109,7 @@ impl<'a> Iterator for ShapeBoundaries<'a> {
 
     #[cfg(feature = "unicode-script")]
     fn next(&mut self) -> Option<Self::Item> {
-        if self.next_boundary_start.is_none() {
-            return None;
-        }
+        self.next_boundary_start?;
 
         let (next_offset, script) = loop {
             match self.chars.next() {
@@ -259,7 +259,7 @@ impl<'a> TextShaper for &rustybuzz::Face<'a> {
     ) {
         let mut buffer = rustybuzz::UnicodeBuffer::new();
         buffer.push_str(text);
-        let glyph_buffer = rustybuzz::shape(&self, &[], buffer);
+        let glyph_buffer = rustybuzz::shape(self, &[], buffer);
 
         let output_glyph_generator =
             glyph_buffer.glyph_infos().iter().zip(glyph_buffer.glyph_positions().iter()).map(
@@ -298,7 +298,7 @@ impl<'a> FontMetrics<f32> for &rustybuzz::Face<'a> {
 fn with_dejavu_font<R>(mut callback: impl FnMut(&rustybuzz::Face<'_>) -> R) -> Option<R> {
     let mut fontdb = fontdb::Database::new();
     let dejavu_path: std::path::PathBuf =
-        [env!("CARGO_MANIFEST_DIR"), "..", "renderers", "femtovg", "fonts", "DejaVuSans.ttf"]
+        [env!("CARGO_MANIFEST_DIR"), "..", "common", "sharedfontdb", "DejaVuSans.ttf"]
             .iter()
             .collect();
     fontdb.load_font_file(dejavu_path).expect("unable to load test dejavu font");

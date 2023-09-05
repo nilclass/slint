@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 use i_slint_core::input::{FocusEventResult, KeyEventType};
 
@@ -11,6 +11,8 @@ struct NativeSpinBoxData {
     active_controls: u32,
     pressed: bool,
 }
+
+type IntArg = (i32,);
 
 #[repr(C)]
 #[derive(FieldOffsets, Default, SlintElement)]
@@ -26,7 +28,10 @@ pub struct NativeSpinBox {
     pub minimum: Property<i32>,
     pub maximum: Property<i32>,
     pub cached_rendering_data: CachedRenderingData,
+    pub edited: Callback<IntArg>,
     data: Property<NativeSpinBoxData>,
+    widget_ptr: std::cell::Cell<SlintTypeErasedWidgetPtr>,
+    animation_tracker: Property<i32>,
 }
 
 cpp! {{
@@ -54,7 +59,12 @@ option.frame = true;
 }}
 
 impl Item for NativeSpinBox {
-    fn init(self: Pin<&Self>, _window_adapter: &Rc<dyn WindowAdapter>) {}
+    fn init(self: Pin<&Self>, _self_rc: &ItemRc) {
+        let animation_tracker_property_ptr = Self::FIELD_OFFSETS.animation_tracker.apply_pin(self);
+        self.widget_ptr.set(cpp! { unsafe [animation_tracker_property_ptr as "void*"] -> SlintTypeErasedWidgetPtr as "std::unique_ptr<SlintTypeErasedWidget>" {
+            return make_unique_animated_widget<QSpinBox>(animation_tracker_property_ptr);
+        }})
+    }
 
     fn geometry(self: Pin<&Self>) -> LogicalRect {
         LogicalRect::new(
@@ -73,12 +83,14 @@ impl Item for NativeSpinBox {
         let active_controls = data.active_controls;
         let pressed = data.pressed;
         let enabled = self.enabled();
+        let widget: NonNull<()> = SlintTypeErasedWidgetPtr::qwidget_ptr(&self.widget_ptr);
 
         let size = cpp!(unsafe [
             //value as "int",
             active_controls as "int",
             pressed as "bool",
-            enabled as "bool"
+            enabled as "bool",
+            widget as "QWidget*"
         ] -> qttypes::QSize as "QSize" {
             ensure_initialized();
             auto style = qApp->style();
@@ -93,8 +105,8 @@ impl Item for NativeSpinBox {
             frame.midLineWidth = 0;
             auto content = option.fontMetrics.boundingRect("0000");
             const QSize margins(2 * 2, 2 * 1); // QLineEditPrivate::verticalMargin and QLineEditPrivate::horizontalMargin
-            auto line_edit_size = style->sizeFromContents(QStyle::CT_LineEdit, &frame, content.size() + margins, nullptr);
-            return style->sizeFromContents(QStyle::CT_SpinBox, &option, line_edit_size, nullptr);
+            auto line_edit_size = style->sizeFromContents(QStyle::CT_LineEdit, &frame, content.size() + margins, widget);
+            return style->sizeFromContents(QStyle::CT_SpinBox, &option, line_edit_size, widget);
         });
         match orientation {
             Orientation::Horizontal => {
@@ -128,6 +140,7 @@ impl Item for NativeSpinBox {
         let mut data = self.data();
         let active_controls = data.active_controls;
         let pressed = data.pressed;
+        let widget: NonNull<()> = SlintTypeErasedWidgetPtr::qwidget_ptr(&self.widget_ptr);
 
         let pos = event
             .position()
@@ -139,7 +152,8 @@ impl Item for NativeSpinBox {
             size as "QSize",
             enabled as "bool",
             active_controls as "int",
-            pressed as "bool"
+            pressed as "bool",
+            widget as "QWidget*"
         ] -> u32 as "int" {
             ensure_initialized();
             auto style = qApp->style();
@@ -148,7 +162,7 @@ impl Item for NativeSpinBox {
             option.rect = { QPoint{}, size };
             initQSpinBoxOptions(option, pressed, enabled, active_controls);
 
-            return style->hitTestComplexControl(QStyle::CC_SpinBox, &option, pos, nullptr);
+            return style->hitTestComplexControl(QStyle::CC_SpinBox, &option, pos, widget);
         });
         let changed = new_control != active_controls
             || match event {
@@ -168,6 +182,7 @@ impl Item for NativeSpinBox {
                         let v = self.value();
                         if v < self.maximum() {
                             self.value.set(v + 1);
+                            Self::FIELD_OFFSETS.edited.apply_pin(self).call(&(v + 1,));
                         }
                     }
                     if new_control
@@ -177,6 +192,7 @@ impl Item for NativeSpinBox {
                         let v = self.value();
                         if v > self.minimum() {
                             self.value.set(v - 1);
+                            Self::FIELD_OFFSETS.edited.apply_pin(self).call(&(v - 1,));
                         }
                     }
                     true
@@ -209,12 +225,16 @@ impl Item for NativeSpinBox {
         if event.text.starts_with(i_slint_core::input::key_codes::UpArrow)
             && self.value() < self.maximum()
         {
-            self.value.set(self.value() + 1);
+            let new_val = self.value() + 1;
+            self.value.set(new_val);
+            Self::FIELD_OFFSETS.edited.apply_pin(self).call(&(new_val,));
             KeyEventResult::EventAccepted
         } else if event.text.starts_with(i_slint_core::input::key_codes::DownArrow)
             && self.value() > self.minimum()
         {
-            self.value.set(self.value() - 1);
+            let new_val = self.value() - 1;
+            self.value.set(new_val);
+            Self::FIELD_OFFSETS.edited.apply_pin(self).call(&(new_val,));
             KeyEventResult::EventAccepted
         } else {
             KeyEventResult::EventIgnored
@@ -263,6 +283,7 @@ impl Item for NativeSpinBox {
         ] {
             auto style = qApp->style();
             QStyleOptionSpinBox option;
+            option.styleObject = widget;
             option.state |= QStyle::State(initial_state);
             if (enabled && has_focus) {
                 option.state |= QStyle::State_HasFocus;

@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 use crate::Coord;
 /// This type is used as a tagging type for use with [`euclid::Scale`] to convert
@@ -85,4 +85,12 @@ impl<T: Copy, U> RectLengths for euclid::Rect<T, U> {
 /// (This doesn't use the `From` trait because it would expose the conversion to euclid in the public API)
 pub fn logical_size_from_api(size: crate::api::LogicalSize) -> LogicalSize {
     size.to_euclid()
+}
+
+pub fn logical_point_from_api(position: crate::api::LogicalPosition) -> LogicalPoint {
+    position.to_euclid()
+}
+
+pub fn logical_position_to_api(pos: LogicalPoint) -> crate::api::LogicalPosition {
+    crate::api::LogicalPosition::from_euclid(pos)
 }

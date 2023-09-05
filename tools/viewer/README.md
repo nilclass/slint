@@ -1,6 +1,7 @@
+<!-- Copyright © SixtyFPS GmbH <info@slint.dev> ; SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial -->
 # Viewer for Slint
 
-This program is a viewer for `.slint` files from the [Slint Project](https://slint-ui.com).
+This program is a viewer for `.slint` files from the [Slint Project](https://slint.dev).
 
 ## Installation
 
@@ -50,7 +51,7 @@ callback. These will be shell escaped.
 Example: Imagine we have a myfile.slint looking like this:
 
 ```slint
-MyApp := Window {
+export component MyApp inherits Window {
   callback open-url(string);
   //...
 }

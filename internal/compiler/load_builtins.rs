@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 /*!
     Parse the contents of builtins.slint and fill the builtin type registry
@@ -9,7 +9,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::expression_tree::Expression;
+use crate::expression_tree::{BuiltinFunction, Expression};
 use crate::langtype::{
     BuiltinElement, BuiltinPropertyInfo, DefaultSizeBinding, ElementType, NativeClass, Type,
 };
@@ -20,7 +20,7 @@ use crate::typeregister::TypeRegister;
 /// Parse the contents of builtins.slint and fill the builtin type registry
 /// `register` is the register to fill with the builtin types.
 /// At this point, it really should already contain the basic Types (string, int, ...)
-pub fn load_builtins(register: &mut TypeRegister) {
+pub(crate) fn load_builtins(register: &mut TypeRegister) {
     let mut diag = crate::diagnostics::BuildDiagnostics::default();
     let node = crate::parser::parse(include_str!("builtins.slint").into(), None, &mut diag);
     if !diag.is_empty() {
@@ -32,22 +32,6 @@ pub fn load_builtins(register: &mut TypeRegister) {
 
     assert_eq!(node.kind(), crate::parser::SyntaxKind::Document);
     let doc: syntax_nodes::Document = node.into();
-
-    // parse structs
-    for s in doc.StructDeclaration().chain(doc.ExportsList().flat_map(|e| e.StructDeclaration())) {
-        let external_name = identifier_text(&s.DeclaredIdentifier()).unwrap();
-        let mut ty = object_tree::type_struct_from_node(s.ObjectType(), &mut diag, register);
-        if let Type::Struct { name, .. } = &mut ty {
-            *name = Some(
-                parse_annotation("name", &s.ObjectType())
-                    .map_or_else(|| external_name.clone(), |s| s.unwrap())
-                    .to_owned(),
-            );
-        } else {
-            unreachable!()
-        }
-        register.insert_type_with_name(ty, external_name);
-    }
 
     let mut natives = HashMap::<String, Rc<BuiltinElement>>::new();
 
@@ -133,7 +117,7 @@ pub fn load_builtins(register: &mut TypeRegister) {
                             }),
                         }),
                     )
-                })),
+                }))
         );
         n.deprecated_aliases = e
             .PropertyDeclaration()
@@ -167,6 +151,20 @@ pub fn load_builtins(register: &mut TypeRegister) {
         } else {
             Base::None
         };
+
+        let member_functions = e
+            .Function()
+            .map(|f| {
+                let name = identifier_text(&f.DeclaredIdentifier()).unwrap();
+                (name.clone(), BuiltinFunction::ItemMemberFunction(name))
+            })
+            .collect::<Vec<_>>();
+        n.properties.extend(
+            member_functions
+                .iter()
+                .map(|(name, fun)| (name.clone(), BuiltinPropertyInfo::new(fun.ty()))),
+        );
+
         let mut builtin = BuiltinElement::new(Rc::new(n));
         builtin.is_global = matches!(base, Base::Global);
         let properties = &mut builtin.properties;
@@ -176,6 +174,7 @@ pub fn load_builtins(register: &mut TypeRegister) {
         properties
             .extend(builtin.native_class.properties.iter().map(|(k, v)| (k.clone(), v.clone())));
 
+        builtin.member_functions.extend(member_functions);
         builtin.disallow_global_types_as_child_elements =
             parse_annotation("disallow_global_types_as_child_elements", &e).is_some();
         builtin.is_non_item_type = parse_annotation("is_non_item_type", &e).is_some();

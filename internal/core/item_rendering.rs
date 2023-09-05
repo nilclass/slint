@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 #![warn(missing_docs)]
 //! module for rendering the tree of items
@@ -14,6 +14,7 @@ use crate::item_tree::{
 use crate::lengths::{
     LogicalLength, LogicalPoint, LogicalPx, LogicalRect, LogicalSize, LogicalVector,
 };
+use crate::properties::PropertyTracker;
 use crate::Coord;
 use alloc::boxed::Box;
 use core::cell::{Cell, RefCell};
@@ -72,18 +73,27 @@ impl CachedRenderingData {
 /// [`ItemCache::component_destroyed`] must be called to clear the cache for that
 /// component.
 #[cfg(feature = "std")]
-#[derive(Default)]
 pub struct ItemCache<T> {
     /// The pointer is a pointer to a component
     map: RefCell<HashMap<*const vtable::Dyn, HashMap<usize, CachedGraphicsData<T>>>>,
+    /// Track if the window scale factor changes; used to clear the cache if necessary.
+    window_scale_factor_tracker: Pin<Box<PropertyTracker>>,
 }
+
+#[cfg(feature = "std")]
+impl<T> Default for ItemCache<T> {
+    fn default() -> Self {
+        Self { map: Default::default(), window_scale_factor_tracker: Box::pin(Default::default()) }
+    }
+}
+
 #[cfg(feature = "std")]
 impl<T: Clone> ItemCache<T> {
     /// Returns the cached value associated to the `item_rc` if it is still valid.
     /// Otherwise call the `update_fn` to compute that value, and track property access
     /// so it is automatically invalided when property becomes dirty.
     pub fn get_or_update_cache_entry(&self, item_rc: &ItemRc, update_fn: impl FnOnce() -> T) -> T {
-        let component = &(*item_rc.component()) as *const _;
+        let component = &(**item_rc.component()) as *const _;
         let mut borrowed = self.map.borrow_mut();
         match borrowed.entry(component).or_default().entry(item_rc.index()) {
             std::collections::hash_map::Entry::Occupied(mut entry) => {
@@ -124,12 +134,22 @@ impl<T: Clone> ItemCache<T> {
         item_rc: &ItemRc,
         callback: impl FnOnce(&T) -> Option<U>,
     ) -> Option<U> {
-        let component = &(*item_rc.component()) as *const _;
+        let component = &(**item_rc.component()) as *const _;
         self.map
             .borrow()
             .get(&component)
             .and_then(|per_component_entries| per_component_entries.get(&item_rc.index()))
             .and_then(|entry| callback(&entry.data))
+    }
+
+    /// Clears the cache if the window's scale factor has changed since the last call.
+    pub fn clear_cache_if_scale_factor_changed(&self, window: &crate::api::Window) {
+        if self.window_scale_factor_tracker.is_dirty() {
+            self.window_scale_factor_tracker
+                .as_ref()
+                .evaluate_as_dependency_root(|| window.scale_factor());
+            self.clear_all();
+        }
     }
 
     /// free the whole cache
@@ -139,7 +159,7 @@ impl<T: Clone> ItemCache<T> {
 
     /// Function that must be called when a component is destroyed.
     ///
-    /// Usually can be called from [`crate::window::WindowAdapterSealed::unregister_component`]
+    /// Usually can be called from [`crate::window::WindowAdapterInternal::unregister_component`]
     pub fn component_destroyed(&self, component: crate::component::ComponentRef) {
         let component_ptr: *const _ =
             crate::component::ComponentRef::as_ptr(component).cast().as_ptr();
@@ -148,7 +168,7 @@ impl<T: Clone> ItemCache<T> {
 
     /// free the cache for a given item
     pub fn release(&self, item_rc: &ItemRc) {
-        let component = &(*item_rc.component()) as *const _;
+        let component = &(**item_rc.component()) as *const _;
         if let Some(sub) = self.map.borrow_mut().get_mut(&component) {
             sub.remove(&item_rc.index());
         }
@@ -380,6 +400,8 @@ pub trait ItemRenderer {
     /// used by the performance counter overlay.
     fn draw_string(&mut self, string: &str, color: crate::Color);
 
+    fn draw_image_direct(&mut self, image: crate::graphics::Image);
+
     /// This is called before it is being rendered (before the draw_* function).
     /// Returns
     ///  - if the item needs to be drawn (false means it is clipped or doesn't need to be drawn)
@@ -548,7 +570,7 @@ impl<'a, T> PartialRenderer<'a, T> {
         if let Some(entry) = rendering_data.get_entry(&mut cache.borrow_mut()) {
             entry
                 .dependency_tracker
-                .get_or_insert_with(|| Box::pin(crate::properties::PropertyTracker::default()))
+                .get_or_insert_with(|| Box::pin(PropertyTracker::default()))
                 .as_ref()
                 .evaluate(render_fn);
         } else {
@@ -593,7 +615,7 @@ impl<'a, T: ItemRenderer> ItemRenderer for PartialRenderer<'a, T> {
         let item_geometry = match rendering_data.get_entry(&mut cache) {
             Some(CachedGraphicsData { data, dependency_tracker }) => {
                 dependency_tracker
-                    .get_or_insert_with(|| Box::pin(crate::properties::PropertyTracker::default()))
+                    .get_or_insert_with(|| Box::pin(PropertyTracker::default()))
                     .as_ref()
                     .evaluate_if_dirty(|| *data = eval());
                 *data
@@ -674,6 +696,10 @@ impl<'a, T: ItemRenderer> ItemRenderer for PartialRenderer<'a, T> {
 
     fn draw_string(&mut self, string: &str, color: crate::Color) {
         self.actual_renderer.draw_string(string, color)
+    }
+
+    fn draw_image_direct(&mut self, image: crate::graphics::image::Image) {
+        self.actual_renderer.draw_image_direct(image)
     }
 
     fn window(&self) -> &crate::window::WindowInner {

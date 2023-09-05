@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 use crate::api::{SetPropertyError, Struct, Value};
 use crate::dynamic_component::InstanceRef;
@@ -9,10 +9,10 @@ use corelib::graphics::{GradientStop, LinearGradientBrush, PathElement, RadialGr
 use corelib::items::{ItemRef, PropertyAnimation};
 use corelib::model::{Model, ModelRc};
 use corelib::rtti::AnimatedBindingKind;
-use corelib::window::WindowInner;
 use corelib::{Brush, Color, PathData, SharedString, SharedVector};
 use i_slint_compiler::expression_tree::{
-    BuiltinFunction, EasingCurve, Expression, Path as ExprPath, PathElement as ExprPathElement,
+    BuiltinFunction, EasingCurve, Expression, MinMaxOp, Path as ExprPath,
+    PathElement as ExprPathElement,
 };
 use i_slint_compiler::langtype::Type;
 use i_slint_compiler::object_tree::ElementRc;
@@ -190,7 +190,7 @@ pub fn eval_expression(expression: &Expression, local_context: &mut EvalLocalCon
             }
         }
         Expression::Cast { from, to } => {
-            let v = eval_expression(&*from, local_context);
+            let v = eval_expression(from, local_context);
             match (v, to) {
                 (Value::Number(n), Type::Int32) => Value::Number(n.round()),
                 (Value::Number(n), Type::String) => {
@@ -220,17 +220,17 @@ pub fn eval_expression(expression: &Expression, local_context: &mut EvalLocalCon
                 let args = arguments.iter().map(|e| eval_expression(e, local_context)).collect::<Vec<_>>();
                 invoke_callback(local_context.component_instance, &nr.element(), nr.name(), &args).unwrap()
             }
-            Expression::BuiltinFunctionReference(f, _) => call_builtin_function(*f, arguments, local_context),
+            Expression::BuiltinFunctionReference(f, _) => call_builtin_function(f.clone(), arguments, local_context),
             _ => panic!("call of something not a callback: {function:?}"),
         }
         Expression::SelfAssignment { lhs, rhs, op, .. } => {
-            let rhs = eval_expression(&**rhs, local_context);
+            let rhs = eval_expression(rhs, local_context);
             eval_assignment(lhs, *op, rhs, local_context);
             Value::Void
         }
         Expression::BinaryExpression { lhs, rhs, op } => {
-            let lhs = eval_expression(&**lhs, local_context);
-            let rhs = eval_expression(&**rhs, local_context);
+            let lhs = eval_expression(lhs, local_context);
+            let rhs = eval_expression(rhs, local_context);
 
             match (op, lhs, rhs) {
                 ('+', Value::String(mut a), Value::String(b)) => { a.push_str(b.as_str()); Value::String(a) },
@@ -263,7 +263,7 @@ pub fn eval_expression(expression: &Expression, local_context: &mut EvalLocalCon
             }
         }
         Expression::UnaryOp { sub, op } => {
-            let sub = eval_expression(&**sub, local_context);
+            let sub = eval_expression(sub, local_context);
             match (sub, op) {
                 (Value::Number(a), '+') => Value::Number(a),
                 (Value::Number(a), '-') => Value::Number(-a),
@@ -285,7 +285,7 @@ pub fn eval_expression(expression: &Expression, local_context: &mut EvalLocalCon
                         ComponentInstance::GlobalComponent(_) => unimplemented!(),
                     };
                     let extra_data = toplevel_instance.component_type.extra_data_offset.apply(toplevel_instance.as_ref());
-                    let path = extra_data.embedded_file_resources.get(resource_id).expect("internal error: invalid resource id");
+                    let path = extra_data.embedded_file_resources.get().unwrap().get(resource_id).expect("internal error: invalid resource id");
 
                     let virtual_file = i_slint_compiler::fileaccess::load_file(std::path::Path::new(path)).unwrap();  // embedding pass ensured that the file exists
 
@@ -311,11 +311,11 @@ pub fn eval_expression(expression: &Expression, local_context: &mut EvalLocalCon
             }))
         }
         Expression::Condition { condition, true_expr, false_expr } => {
-            match eval_expression(&**condition, local_context).try_into()
+            match eval_expression(condition, local_context).try_into()
                 as Result<bool, _>
             {
-                Ok(true) => eval_expression(&**true_expr, local_context),
-                Ok(false) => eval_expression(&**false_expr, local_context),
+                Ok(true) => eval_expression(true_expr, local_context),
+                Ok(false) => eval_expression(false_expr, local_context),
                 _ => local_context.return_value.clone().expect("conditional expression did not evaluate to boolean"),
             }
         }
@@ -387,6 +387,18 @@ pub fn eval_expression(expression: &Expression, local_context: &mut EvalLocalCon
         }
         Expression::ComputeLayoutInfo(lay, o) => crate::eval_layout::compute_layout_info(lay, *o, local_context),
         Expression::SolveLayout(lay, o) => crate::eval_layout::solve_layout(lay, *o, local_context),
+        Expression::MinMax { ty: _, op, lhs, rhs } => {
+            let Value::Number(lhs) = eval_expression(lhs, local_context) else {
+                return local_context.return_value.clone().expect("minmax lhs expression did not evaluate to number");
+            };
+            let Value::Number(rhs) =  eval_expression(rhs, local_context) else {
+                return local_context.return_value.clone().expect("minmax rhs expression did not evaluate to number");
+            };
+            match op {
+                MinMaxOp::Min => Value::Number(lhs.min(rhs)),
+                MinMaxOp::Max => Value::Number(lhs.max(rhs)),
+            }
+        }
     }
 }
 
@@ -398,22 +410,18 @@ fn call_builtin_function(
     match f {
         BuiltinFunction::GetWindowScaleFactor => match local_context.component_instance {
             ComponentInstance::InstanceRef(component) => {
-                Value::Number(window_ref(component).unwrap().scale_factor() as _)
+                Value::Number(component.access_window(|window| window.scale_factor()) as _)
             }
             ComponentInstance::GlobalComponent(_) => {
                 panic!("Cannot get the window from a global component")
             }
         },
         BuiltinFunction::GetWindowDefaultFontSize => match local_context.component_instance {
-            ComponentInstance::InstanceRef(component) => Value::Number(
-                window_ref(component)
-                    .unwrap()
-                    .window_item()
-                    .unwrap()
-                    .as_pin_ref()
-                    .default_font_size()
-                    .get() as _,
-            ),
+            ComponentInstance::InstanceRef(component) => {
+                Value::Number(component.access_window(|window| {
+                    window.window_item().unwrap().as_pin_ref().default_font_size().get()
+                }) as _)
+            }
             ComponentInstance::GlobalComponent(_) => {
                 panic!("Cannot get the window from a global component")
             }
@@ -508,10 +516,12 @@ fn call_builtin_function(
                 let focus_item_comp =
                     enclosing_component.self_weak().get().unwrap().upgrade().unwrap();
 
-                window_ref(component).unwrap().set_focus_item(&corelib::items::ItemRc::new(
-                    vtable::VRc::into_dyn(focus_item_comp),
-                    item_info.item_index(),
-                ));
+                component.access_window(|window| {
+                    window.set_focus_item(&corelib::items::ItemRc::new(
+                        vtable::VRc::into_dyn(focus_item_comp),
+                        item_info.item_index(),
+                    ))
+                });
                 Value::Void
             } else {
                 panic!("internal error: argument to SetFocusItem must be an element")
@@ -572,13 +582,78 @@ fn call_builtin_function(
                         x.try_into().unwrap(),
                         y.try_into().unwrap(),
                     ),
+                    popup.close_on_click,
                     component.borrow(),
-                    window_adapter_ref(component).unwrap(),
+                    component.window_adapter(),
                     &parent_item,
                 );
                 Value::Void
             } else {
                 panic!("internal error: argument to SetFocusItem must be an element")
+            }
+        }
+        BuiltinFunction::ClosePopupWindow => {
+            let component = match local_context.component_instance {
+                ComponentInstance::InstanceRef(c) => c,
+                ComponentInstance::GlobalComponent(_) => {
+                    panic!("Cannot show popup from a global component")
+                }
+            };
+
+            component.access_window(|window| window.close_popup());
+
+            Value::Void
+        }
+        BuiltinFunction::ItemMemberFunction(name) => {
+            if arguments.len() != 1 {
+                panic!("internal error: incorrect argument count to item member function call")
+            }
+            let component = match local_context.component_instance {
+                ComponentInstance::InstanceRef(c) => c,
+                ComponentInstance::GlobalComponent(_) => {
+                    panic!("Cannot invoke member function on item from a global component")
+                }
+            };
+            if let Expression::ElementReference(element) = &arguments[0] {
+                generativity::make_guard!(guard);
+
+                let elem = element.upgrade().unwrap();
+                let enclosing_component = enclosing_component_for_element(&elem, component, guard);
+                let component_type = enclosing_component.component_type;
+                let item_info = &component_type.items[elem.borrow().id.as_str()];
+                let item_ref =
+                    unsafe { item_info.item_from_component(enclosing_component.as_ptr()) };
+
+                let item_comp = enclosing_component.self_weak().get().unwrap().upgrade().unwrap();
+                let item_rc = corelib::items::ItemRc::new(
+                    vtable::VRc::into_dyn(item_comp),
+                    item_info.item_index(),
+                );
+
+                let window_adapter = component.window_adapter();
+
+                // TODO: Make this generic through RTTI
+                if let Some(textinput) =
+                    ItemRef::downcast_pin::<corelib::items::TextInput>(item_ref)
+                {
+                    match &*name {
+                        "select-all" => textinput.select_all(&window_adapter, &item_rc),
+                        "clear-selection" => textinput.clear_selection(&window_adapter, &item_rc),
+                        "cut" => textinput.cut(&window_adapter, &item_rc),
+                        "copy" => textinput.copy(&window_adapter, &item_rc),
+                        "paste" => textinput.paste(&window_adapter, &item_rc),
+                        _ => panic!("internal: Unknown member function {name} called on TextInput"),
+                    }
+                } else {
+                    panic!(
+                        "internal error: member function called on element that doesn't have it: {}",
+                        elem.borrow().original_name()
+                    )
+                }
+
+                Value::Void
+            } else {
+                panic!("internal error: argument to TextInputSelectAll must be an element")
             }
         }
         BuiltinFunction::StringIsFloat => {
@@ -629,6 +704,64 @@ fn call_builtin_function(
                 panic!("First argument not a color");
             }
         }
+        BuiltinFunction::ColorTransparentize => {
+            if arguments.len() != 2 {
+                panic!("internal error: incorrect argument count to ColorFaded")
+            }
+            if let Value::Brush(brush) = eval_expression(&arguments[0], local_context) {
+                if let Value::Number(factor) = eval_expression(&arguments[1], local_context) {
+                    brush.transparentize(factor as _).into()
+                } else {
+                    panic!("Second argument not a number");
+                }
+            } else {
+                panic!("First argument not a color");
+            }
+        }
+        BuiltinFunction::ColorMix => {
+            if arguments.len() != 3 {
+                panic!("internal error: incorrect argument count to ColorMix")
+            }
+
+            let arg0 = eval_expression(&arguments[0], local_context);
+            let arg1 = eval_expression(&arguments[1], local_context);
+            let arg2 = eval_expression(&arguments[2], local_context);
+
+            if !matches!(arg0, Value::Brush(Brush::SolidColor(_))) {
+                panic!("First argument not a color");
+            }
+            if !matches!(arg1, Value::Brush(Brush::SolidColor(_))) {
+                panic!("Second argument not a color");
+            }
+            if !matches!(arg2, Value::Number(_)) {
+                panic!("Third argument not a number");
+            }
+
+            let (
+                Value::Brush(Brush::SolidColor(color_a)),
+                Value::Brush(Brush::SolidColor(color_b)),
+                Value::Number(factor),
+            ) = (arg0, arg1, arg2)
+            else {
+                unreachable!()
+            };
+
+            color_a.mix(&color_b, factor as _).into()
+        }
+        BuiltinFunction::ColorWithAlpha => {
+            if arguments.len() != 2 {
+                panic!("internal error: incorrect argument count to ColorWithAlpha")
+            }
+            if let Value::Brush(brush) = eval_expression(&arguments[0], local_context) {
+                if let Value::Number(factor) = eval_expression(&arguments[1], local_context) {
+                    brush.with_alpha(factor as _).into()
+                } else {
+                    panic!("Second argument not a number");
+                }
+            } else {
+                panic!("First argument not a color");
+            }
+        }
         BuiltinFunction::ImageSize => {
             if arguments.len() != 1 {
                 panic!("internal error: incorrect argument count to ImageSize")
@@ -671,16 +804,19 @@ fn call_builtin_function(
             Value::Brush(Brush::SolidColor(Color::from_argb_u8(a, r, g, b)))
         }
         BuiltinFunction::DarkColorScheme => match local_context.component_instance {
-            ComponentInstance::InstanceRef(component) => {
-                Value::Bool(window_adapter_ref(component).unwrap().dark_color_scheme())
-            }
+            ComponentInstance::InstanceRef(component) => Value::Bool(
+                component
+                    .window_adapter()
+                    .internal(corelib::InternalToken)
+                    .map_or(false, |x| x.dark_color_scheme()),
+            ),
             ComponentInstance::GlobalComponent(_) => {
                 panic!("Cannot get the window from a global component")
             }
         },
         BuiltinFunction::TextInputFocused => match local_context.component_instance {
             ComponentInstance::InstanceRef(component) => {
-                Value::Bool(window_ref(component).unwrap().text_input_focused() as _)
+                Value::Bool(component.access_window(|window| window.text_input_focused()) as _)
             }
             ComponentInstance::GlobalComponent(_) => {
                 panic!("Cannot get the window from a global component")
@@ -688,9 +824,11 @@ fn call_builtin_function(
         },
         BuiltinFunction::SetTextInputFocused => match local_context.component_instance {
             ComponentInstance::InstanceRef(component) => {
-                window_ref(component).unwrap().set_text_input_focused(
-                    eval_expression(&arguments[0], local_context).try_into().unwrap(),
-                );
+                component.access_window(|window| {
+                    window.set_text_input_focused(
+                        eval_expression(&arguments[0], local_context).try_into().unwrap(),
+                    )
+                });
                 Value::Void
             }
             ComponentInstance::GlobalComponent(_) => {
@@ -714,13 +852,46 @@ fn call_builtin_function(
                 let item_ref =
                     unsafe { item_info.item_from_component(enclosing_component.as_ptr()) };
 
-                let window_adapter = window_adapter_ref(component).unwrap();
+                let window_adapter = component.window_adapter();
                 item_ref
                     .as_ref()
-                    .layout_info(crate::eval_layout::to_runtime(orient), window_adapter)
+                    .layout_info(crate::eval_layout::to_runtime(orient), &window_adapter)
                     .into()
             } else {
                 panic!("internal error: incorrect arguments to ImplicitLayoutInfo {:?}", arguments);
+            }
+        }
+        BuiltinFunction::ItemAbsolutePosition => {
+            if arguments.len() != 1 {
+                panic!("internal error: incorrect argument count to ItemAbsolutePosition")
+            }
+
+            let component = match local_context.component_instance {
+                ComponentInstance::InstanceRef(c) => c,
+                ComponentInstance::GlobalComponent(_) => {
+                    panic!("Cannot access the implicit item size from a global component")
+                }
+            };
+
+            if let Expression::ElementReference(item) = &arguments[0] {
+                generativity::make_guard!(guard);
+
+                let item = item.upgrade().unwrap();
+                let enclosing_component = enclosing_component_for_element(&item, component, guard);
+                let component_type = enclosing_component.component_type;
+
+                let item_info = &component_type.items[item.borrow().id.as_str()];
+
+                let item_comp = enclosing_component.self_weak().get().unwrap().upgrade().unwrap();
+
+                let item_rc = corelib::items::ItemRc::new(
+                    vtable::VRc::into_dyn(item_comp),
+                    item_info.item_index(),
+                );
+
+                item_rc.map_to_window(Default::default()).to_untyped().into()
+            } else {
+                panic!("internal error: argument to SetFocusItem must be an element")
             }
         }
         BuiltinFunction::RegisterCustomFontByPath => {
@@ -734,8 +905,8 @@ fn call_builtin_function(
                 }
             };
             if let Value::String(s) = eval_expression(&arguments[0], local_context) {
-                if let Some(err) = window_adapter_ref(component)
-                    .unwrap()
+                if let Some(err) = component
+                    .window_adapter()
                     .renderer()
                     .register_font_from_path(&std::path::PathBuf::from(s.as_str()))
                     .err()
@@ -749,6 +920,31 @@ fn call_builtin_function(
         }
         BuiltinFunction::RegisterCustomFontByMemory | BuiltinFunction::RegisterBitmapFont => {
             unimplemented!()
+        }
+        BuiltinFunction::Translate => {
+            let original: SharedString =
+                eval_expression(&arguments[0], local_context).try_into().unwrap();
+            let context: SharedString =
+                eval_expression(&arguments[1], local_context).try_into().unwrap();
+            let domain: SharedString =
+                eval_expression(&arguments[2], local_context).try_into().unwrap();
+            let args = eval_expression(&arguments[3], local_context);
+            let Value::Model(args) = args else { panic!("Args to translate not a model {args:?}") };
+            struct StringModelWrapper(ModelRc<Value>);
+            impl corelib::translations::FormatArgs for StringModelWrapper {
+                type Output<'a> = SharedString;
+                fn from_index(&self, index: usize) -> Option<SharedString> {
+                    self.0.row_data(index).map(|x| x.try_into().unwrap())
+                }
+            }
+            Value::String(corelib::translations::translate(
+                &original,
+                &context,
+                &domain,
+                &StringModelWrapper(args),
+                eval_expression(&arguments[4], local_context).try_into().unwrap(),
+                &SharedString::try_from(eval_expression(&arguments[5], local_context)).unwrap(),
+            ))
         }
     }
 }
@@ -1024,6 +1220,7 @@ fn check_value_type(value: &Value, ty: &Type) -> bool {
             matches!(value, Value::EnumerationValue(name, _) if name == en.name.as_str())
         }
         Type::LayoutCache => matches!(value, Value::LayoutCache(_)),
+        Type::ComponentFactory => matches!(value, Value::ComponentFactory(_)),
     }
 }
 
@@ -1057,7 +1254,7 @@ pub(crate) fn invoke_callback(
                         // If the callback was not set, the return value will be Value::Void, but we need
                         // to make sure that the value is actually of the right type as returned by the
                         // callback, otherwise we will get panics later
-                        default_value_for_type(&*rt)
+                        default_value_for_type(rt)
                     } else {
                         res
                     });
@@ -1100,11 +1297,11 @@ pub(crate) fn call_function(
 
 fn root_component_instance<'a, 'old_id, 'new_id>(
     component: InstanceRef<'a, 'old_id>,
-    guard: generativity::Guard<'new_id>,
+    _guard: generativity::Guard<'new_id>,
 ) -> InstanceRef<'a, 'new_id> {
     if let Some(parent_offset) = component.component_type.parent_component_offset {
         let parent_component =
-            if let Some(parent) = parent_offset.apply(&*component.instance.get_ref()) {
+            if let Some(parent) = parent_offset.apply(component.instance.get_ref()).get() {
                 *parent
             } else {
                 panic!("invalid parent ptr");
@@ -1114,7 +1311,7 @@ fn root_component_instance<'a, 'old_id, 'new_id>(
         let static_guard = unsafe { generativity::Guard::new(generativity::Id::<'static>::new()) };
         root_component_instance(
             unsafe { InstanceRef::from_pin_ref(parent_component, static_guard) },
-            guard,
+            _guard,
         )
     } else {
         // Safety: new_id is an unique id
@@ -1124,25 +1321,12 @@ fn root_component_instance<'a, 'old_id, 'new_id>(
     }
 }
 
-pub fn window_adapter_ref<'a>(
-    component: InstanceRef<'a, '_>,
-) -> Option<&'a Rc<dyn i_slint_core::window::WindowAdapter>> {
-    component.component_type.window_adapter_offset.apply(component.instance.get_ref()).as_ref()
-}
-
-pub fn window_ref<'a>(
-    component: InstanceRef<'a, '_>,
-) -> Option<&'a i_slint_core::window::WindowInner> {
-    window_adapter_ref(component)
-        .map(|window_adapter| WindowInner::from_pub(window_adapter.window()))
-}
-
 /// Return the component instance which hold the given element.
 /// Does not take in account the global component.
 pub fn enclosing_component_for_element<'a, 'old_id, 'new_id>(
     element: &'a ElementRc,
     component: InstanceRef<'a, 'old_id>,
-    guard: generativity::Guard<'new_id>,
+    _guard: generativity::Guard<'new_id>,
 ) -> InstanceRef<'a, 'new_id> {
     let enclosing = &element.borrow().enclosing_component.upgrade().unwrap();
     if Rc::ptr_eq(enclosing, &component.component_type.original) {
@@ -1157,21 +1341,22 @@ pub fn enclosing_component_for_element<'a, 'old_id, 'new_id>(
             .parent_component_offset
             .unwrap()
             .apply(component.as_ref())
+            .get()
             .unwrap();
         generativity::make_guard!(new_guard);
-        let parent_instance = unsafe { InstanceRef::from_pin_ref(parent_component, new_guard) };
+        let parent_instance = unsafe { InstanceRef::from_pin_ref(*parent_component, new_guard) };
         let parent_instance = unsafe {
             core::mem::transmute::<InstanceRef, InstanceRef<'a, 'static>>(parent_instance)
         };
-        enclosing_component_for_element(element, parent_instance, guard)
+        enclosing_component_for_element(element, parent_instance, _guard)
     }
 }
 
 /// Return the component instance which hold the given element.
 /// The difference with enclosing_component_for_element is that it takes the GlobalComponent into account.
-pub(crate) fn enclosing_component_instance_for_element<'a, 'old_id, 'new_id>(
+pub(crate) fn enclosing_component_instance_for_element<'a, 'new_id>(
     element: &'a ElementRc,
-    component_instance: ComponentInstance<'a, 'old_id>,
+    component_instance: ComponentInstance<'a, '_>,
     guard: generativity::Guard<'new_id>,
 ) -> ComponentInstance<'a, 'new_id> {
     let enclosing = &element.borrow().enclosing_component.upgrade().unwrap();
@@ -1184,8 +1369,13 @@ pub(crate) fn enclosing_component_instance_for_element<'a, 'old_id, 'new_id>(
                     unsafe { generativity::Guard::new(generativity::Id::<'static>::new()) };
                 let root = root_component_instance(component, static_guard);
                 ComponentInstance::GlobalComponent(
-                    &root.component_type.extra_data_offset.apply(&*root.instance.get_ref()).globals
-                        [enclosing.root_element.borrow().id.as_str()],
+                    &root
+                        .component_type
+                        .extra_data_offset
+                        .apply(root.instance.get_ref())
+                        .globals
+                        .get()
+                        .unwrap()[enclosing.root_element.borrow().id.as_str()],
                 )
             } else {
                 ComponentInstance::InstanceRef(enclosing_component_for_element(
@@ -1316,6 +1506,7 @@ pub fn default_value_for_type(ty: &Type) -> Value {
         Type::UnitProduct(_) => Value::Number(0.),
         Type::PathData => Value::PathData(Default::default()),
         Type::LayoutCache => Value::LayoutCache(Default::default()),
+        Type::ComponentFactory => Value::ComponentFactory(Default::default()),
         Type::InferredProperty
         | Type::InferredCallback
         | Type::ElementReference

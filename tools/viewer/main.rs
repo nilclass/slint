@@ -1,16 +1,16 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 #![doc = include_str!("README.md")]
 
 use i_slint_core::model::{Model, ModelRc};
 use i_slint_core::SharedVector;
-use slint_interpreter::{ComponentHandle, ComponentInstance, SharedString, Value};
-use std::future::Future;
-use std::pin::Pin;
+use slint_interpreter::{
+    ComponentDefinition, ComponentHandle, ComponentInstance, SharedString, Value,
+};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
-use std::task::Wake;
 
 use clap::Parser;
 
@@ -52,6 +52,16 @@ struct Cli {
     /// and so on.
     #[arg(long, value_names(&["callback", "handler"]), number_of_values = 2, action)]
     on: Vec<String>,
+
+    #[cfg(feature = "gettext")]
+    /// Translation domain
+    #[arg(long = "translation-domain", action)]
+    translation_domain: Option<String>,
+
+    #[cfg(feature = "gettext")]
+    /// Translation directory where the translation files are searched for
+    #[arg(long = "translation-dir", action)]
+    translation_dir: Option<std::path::PathBuf>,
 }
 
 thread_local! {static CURRENT_INSTANCE: std::cell::RefCell<Option<ComponentInstance>> = Default::default();}
@@ -70,6 +80,14 @@ fn main() -> Result<()> {
         std::env::set_var("SLINT_BACKEND", backend);
     }
 
+    #[cfg(feature = "gettext")]
+    if let Some(dirname) = args.translation_dir.clone() {
+        i_slint_core::translations::gettext_bindtextdomain(
+            args.translation_domain.as_ref().map(String::as_str).unwrap_or_default(),
+            dirname,
+        )?;
+    };
+
     let fswatcher = if args.auto_reload { Some(start_fswatch_thread(args.clone())?) } else { None };
     let mut compiler = init_compiler(&args, fswatcher);
 
@@ -85,7 +103,7 @@ fn main() -> Result<()> {
     init_dialog(&component);
 
     if let Some(data_path) = args.load_data {
-        load_data(&component, &data_path)?;
+        load_data(&c, &component, &data_path)?;
     }
     install_callbacks(&component, &args.on);
 
@@ -117,6 +135,9 @@ fn main() -> Result<()> {
                         }
                         Some(obj.into())
                     }
+                    slint_interpreter::Value::EnumerationValue(_class, value) => {
+                        Some(value.as_str().into())
+                    }
                     _ => None,
                 }
             }
@@ -139,6 +160,10 @@ fn init_compiler(
     fswatcher: Option<Arc<Mutex<notify::RecommendedWatcher>>>,
 ) -> slint_interpreter::ComponentCompiler {
     let mut compiler = slint_interpreter::ComponentCompiler::default();
+    #[cfg(feature = "gettext")]
+    if let Some(domain) = args.translation_domain.clone() {
+        compiler.set_translation_domain(domain);
+    }
     compiler.set_include_paths(args.include_paths.clone());
     if let Some(style) = &args.style {
         compiler.set_style(style.clone());
@@ -210,7 +235,12 @@ fn start_fswatch_thread(args: Cli) -> Result<Arc<Mutex<notify::RecommendedWatche
                     && PENDING_EVENTS.load(Ordering::SeqCst) == 0
                 {
                     PENDING_EVENTS.fetch_add(1, Ordering::SeqCst);
-                    run_in_ui_thread(Box::pin(reload(args.clone(), w2.clone())));
+                    let args = args.clone();
+                    let w2 = w2.clone();
+                    i_slint_core::api::invoke_from_event_loop(move || {
+                        i_slint_core::future::spawn_local(reload(args, w2)).unwrap();
+                    })
+                    .unwrap();
                 }
             }
         }
@@ -228,7 +258,7 @@ async fn reload(args: Cli, fswatcher: Arc<Mutex<notify::RecommendedWatcher>>) {
             let mut current = current.borrow_mut();
             if let Some(handle) = current.take() {
                 let window = handle.window();
-                let new_handle = c.create_with_existing_window(window);
+                let new_handle = c.create_with_existing_window(window).unwrap();
                 init_dialog(&new_handle);
                 current.replace(new_handle);
             } else {
@@ -238,7 +268,7 @@ async fn reload(args: Cli, fswatcher: Arc<Mutex<notify::RecommendedWatcher>>) {
                 current.replace(handle);
             }
             if let Some(data_path) = args.load_data {
-                let _ = load_data(current.as_ref().unwrap(), &data_path);
+                let _ = load_data(&c, current.as_ref().unwrap(), &data_path);
             }
             eprintln!("Successful reload of {}", args.path.display());
         });
@@ -247,40 +277,83 @@ async fn reload(args: Cli, fswatcher: Arc<Mutex<notify::RecommendedWatcher>>) {
     PENDING_EVENTS.fetch_sub(1, Ordering::SeqCst);
 }
 
-fn load_data(instance: &ComponentInstance, data_path: &std::path::Path) -> Result<()> {
+fn load_data(
+    c: &ComponentDefinition,
+    instance: &ComponentInstance,
+    data_path: &std::path::Path,
+) -> Result<()> {
     let json: serde_json::Value = if data_path == std::path::Path::new("-") {
         serde_json::from_reader(std::io::stdin())?
     } else {
         serde_json::from_reader(std::fs::File::open(data_path)?)?
     };
 
+    let types = c.properties_and_callbacks().collect::<HashMap<_, _>>();
     let obj = json.as_object().ok_or("The data is not a JSON object")?;
     for (name, v) in obj {
-        fn from_json(v: &serde_json::Value) -> slint_interpreter::Value {
+        fn from_json(
+            t: &i_slint_compiler::langtype::Type,
+            v: &serde_json::Value,
+        ) -> slint_interpreter::Value {
             match v {
                 serde_json::Value::Null => slint_interpreter::Value::Void,
                 serde_json::Value::Bool(b) => (*b).into(),
                 serde_json::Value::Number(n) => {
                     slint_interpreter::Value::Number(n.as_f64().unwrap_or(f64::NAN))
                 }
-                serde_json::Value::String(s) => SharedString::from(s.as_str()).into(),
-                serde_json::Value::Array(array) => slint_interpreter::Value::Model(ModelRc::new(
-                    i_slint_core::model::SharedVectorModel::from(
-                        array.iter().map(from_json).collect::<SharedVector<Value>>(),
+                serde_json::Value::String(s) => match t {
+                    i_slint_compiler::langtype::Type::Enumeration(e) => {
+                        if e.values.contains(s) {
+                            slint_interpreter::Value::EnumerationValue(
+                                e.name.to_string(),
+                                s.to_string(),
+                            )
+                        } else {
+                            eprintln!("Warning: Unexpected value for enum '{}': {}", e.name, s);
+                            slint_interpreter::Value::Void
+                        }
+                    }
+                    i_slint_compiler::langtype::Type::String => {
+                        SharedString::from(s.as_str()).into()
+                    }
+                    _ => slint_interpreter::Value::Void,
+                },
+                serde_json::Value::Array(array) => match t {
+                    i_slint_compiler::langtype::Type::Array(it) => slint_interpreter::Value::Model(
+                        ModelRc::new(i_slint_core::model::SharedVectorModel::from(
+                            array.iter().map(|v| from_json(it, v)).collect::<SharedVector<Value>>(),
+                        )),
                     ),
-                )),
-                serde_json::Value::Object(obj) => obj
-                    .iter()
-                    .map(|(k, v)| (k.clone(), from_json(v)))
-                    .collect::<slint_interpreter::Struct>()
-                    .into(),
+                    _ => slint_interpreter::Value::Void,
+                },
+                serde_json::Value::Object(obj) => match t {
+                    i_slint_compiler::langtype::Type::Struct { fields, .. } => obj
+                        .iter()
+                        .filter_map(|(k, v)| match fields.get(k) {
+                            Some(t) => Some((k.clone(), from_json(t, v))),
+                            None => {
+                                eprintln!("Warning: ignoring unknown property: {}", k);
+                                None
+                            }
+                        })
+                        .collect::<slint_interpreter::Struct>()
+                        .into(),
+                    _ => slint_interpreter::Value::Void,
+                },
             }
         }
 
-        match instance.set_property(name, from_json(v)) {
-            Ok(()) => (),
-            Err(e) => eprintln!("Warning: cannot set property '{}' from data file: {:?}", name, e),
-        };
+        match types.get(name) {
+            Some(t) => {
+                match instance.set_property(name, from_json(t, v)) {
+                    Ok(()) => (),
+                    Err(e) => {
+                        eprintln!("Warning: cannot set property '{}' from data file: {:?}", name, e)
+                    }
+                };
+            }
+            None => eprintln!("Warning: ignoring unknown property: {}", name),
+        }
     }
     Ok(())
 }
@@ -332,35 +405,4 @@ fn execute_cmd(cmd: &str, callback_args: &[Value]) -> Result<()> {
     }
     command.spawn()?;
     Ok(())
-}
-
-/// This type is duplicated with lsp/preview.rs
-struct FutureRunner {
-    fut: Mutex<Option<Pin<Box<dyn Future<Output = ()>>>>>,
-}
-
-/// Safety: the future is only going to be run in the UI thread
-unsafe impl Send for FutureRunner {}
-/// Safety: the future is only going to be run in the UI thread
-unsafe impl Sync for FutureRunner {}
-
-impl Wake for FutureRunner {
-    fn wake(self: Arc<Self>) {
-        i_slint_core::api::invoke_from_event_loop(move || {
-            let waker = self.clone().into();
-            let mut cx = std::task::Context::from_waker(&waker);
-            let mut fut_opt = self.fut.lock().unwrap();
-            if let Some(fut) = &mut *fut_opt {
-                match fut.as_mut().poll(&mut cx) {
-                    std::task::Poll::Ready(_) => *fut_opt = None,
-                    std::task::Poll::Pending => {}
-                }
-            }
-        })
-        .unwrap();
-    }
-}
-
-fn run_in_ui_thread(fut: Pin<Box<dyn Future<Output = ()>>>) {
-    Arc::new(FutureRunner { fut: Mutex::new(Some(fut)) }).wake()
 }

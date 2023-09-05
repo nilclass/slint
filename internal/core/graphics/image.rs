@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 /*!
 This module contains image decoding and caching related types for the run-time library.
@@ -304,6 +304,8 @@ impl ImageCacheKey {
             #[cfg(target_arch = "wasm32")]
             ImageInner::HTMLImage(htmlimage) => Self::URL(htmlimage.source().into()),
             ImageInner::BackendStorage(x) => vtable::VRc::borrow(x).cache_key(),
+            #[cfg(not(target_arch = "wasm32"))]
+            ImageInner::BorrowedOpenGLTexture(..) => return None,
         };
         if matches!(key, ImageCacheKey::Invalid) {
             None
@@ -339,6 +341,8 @@ pub enum ImageInner {
     #[cfg(target_arch = "wasm32")]
     HTMLImage(vtable::VRc<OpaqueImageVTable, htmlimage::HTMLImage>),
     BackendStorage(vtable::VRc<OpaqueImageVTable>),
+    #[cfg(not(target_arch = "wasm32"))]
+    BorrowedOpenGLTexture(BorrowedOpenGLTexture),
 }
 
 impl ImageInner {
@@ -359,7 +363,7 @@ impl ImageInner {
                     Ok(b) => Some(b),
                     Err(err) => {
                         eprintln!("Error rendering SVG: {}", err);
-                        return None;
+                        None
                     }
                 }
             }
@@ -450,6 +454,8 @@ impl PartialEq for ImageInner {
             (Self::StaticTextures(l0), Self::StaticTextures(r0)) => l0 == r0,
             #[cfg(target_arch = "wasm32")]
             (Self::HTMLImage(l0), Self::HTMLImage(r0)) => vtable::VRc::ptr_eq(l0, r0),
+            #[cfg(not(target_arch = "wasm32"))]
+            (Self::BorrowedOpenGLTexture(l0), Self::BorrowedOpenGLTexture(r0)) => l0 == r0,
             _ => core::mem::discriminant(self) == core::mem::discriminant(other),
         }
     }
@@ -605,6 +611,35 @@ impl Image {
         })
     }
 
+    /// Creates a new Image from an existing OpenGL texture. The texture remains borrowed by Slint
+    /// for the duration of being used for rendering, such as when assigned as source property to
+    /// an `Image` element. It's the application's responsibility to delete the texture when it is
+    /// not used anymore.
+    ///
+    /// The texture must be bindable against the `GL_TEXTURE_2D` target, have `GL_RGBA` as format
+    /// for the pixel data.
+    ///
+    /// When Slint renders the texture, it assumes that the origin of the texture is at the top-left.
+    /// This is different from the default OpenGL coordinate system.
+    ///
+    /// # Safety
+    ///
+    /// This function is unsafe because invalid texture ids may lead to undefind behavior in OpenGL
+    /// drivers. A valid texture id is one that was created by the same OpenGL context that is
+    /// current during any of the invocations of the callback set on [`Window::set_rendering_notifier()`](crate::api::Window::set_rendering_notifier).
+    /// OpenGL contexts between instances of [`slint::Window`](crate::api::Window) are not sharing resources. Consequently
+    /// [`slint::Image`](Self) objects created from borrowed OpenGL textures cannot be shared between
+    /// different windows.
+    #[allow(unsafe_code)]
+    #[cfg(not(target_arch = "wasm32"))]
+    #[deprecated(since = "1.2.0", note = "Use BorrowedOpenGLTextureBuilder")]
+    pub unsafe fn from_borrowed_gl_2d_rgba_texture(
+        texture_id: core::num::NonZeroU32,
+        size: IntSize,
+    ) -> Self {
+        BorrowedOpenGLTextureBuilder::new_gl_2d_rgba_texture(texture_id, size).build()
+    }
+
     /// Creates a new Image from the specified buffer, which contains SVG raw data.
     #[cfg(feature = "svg")]
     pub fn load_from_svg_data(buffer: &[u8]) -> Result<Self, LoadImageError> {
@@ -625,6 +660,8 @@ impl Image {
             #[cfg(target_arch = "wasm32")]
             ImageInner::HTMLImage(htmlimage) => htmlimage.size().unwrap_or_default(),
             ImageInner::BackendStorage(x) => vtable::VRc::borrow(x).size(),
+            #[cfg(not(target_arch = "wasm32"))]
+            ImageInner::BorrowedOpenGLTexture(BorrowedOpenGLTexture { size, .. }) => *size,
         }
     }
 
@@ -642,12 +679,81 @@ impl Image {
     /// ```
     pub fn path(&self) -> Option<&std::path::Path> {
         match &self.0 {
-            ImageInner::EmbeddedImage { cache_key, .. } => match cache_key {
-                ImageCacheKey::Path(path) => Some(std::path::Path::new(path.as_str())),
-                _ => None,
-            },
+            ImageInner::EmbeddedImage { cache_key: ImageCacheKey::Path(path), .. } => {
+                Some(std::path::Path::new(path.as_str()))
+            }
             _ => None,
         }
+    }
+}
+
+/// This enum describes the origin to use when rendering a borrowed OpenGL texture.
+/// Use this with [`BorrowedOpenGLTextureBuilder::origin`].
+#[derive(Copy, Clone, Debug, PartialEq, Default)]
+#[repr(u8)]
+#[non_exhaustive]
+pub enum BorrowedOpenGLTextureOrigin {
+    /// The top-left of the texture is the top-left of the texture drawn on the screen.
+    #[default]
+    TopLeft,
+    /// The bottom-left of the texture is the top-left of the texture draw on the screen,
+    /// flipping it vertically.
+    BottomLeft,
+}
+
+/// Factory to create [`slint::Image`](crate::graphics::Image) from an existing OpenGL texture.
+///
+/// Methods can be chained on it in order to configure it.
+///
+///  * `origin`: Change the texture's origin when rendering (default: TopLeft).
+///
+/// Complete the builder by calling [`Self::build()`] to create a [`slint::Image`](crate::graphics::Image):
+///
+/// ```
+/// # use i_slint_core::graphics::{BorrowedOpenGLTextureBuilder, Image, IntSize, BorrowedOpenGLTextureOrigin};
+/// # let texture_id = core::num::NonZeroU32::new(1).unwrap();
+/// # let size = IntSize::new(100, 100);
+/// let builder = unsafe { BorrowedOpenGLTextureBuilder::new_gl_2d_rgba_texture(texture_id, size) }
+///              .origin(BorrowedOpenGLTextureOrigin::TopLeft);
+///
+/// let image: slint::Image = builder.build();
+/// ```
+#[cfg(not(target_arch = "wasm32"))]
+pub struct BorrowedOpenGLTextureBuilder(BorrowedOpenGLTexture);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl BorrowedOpenGLTextureBuilder {
+    /// Generates the base configuration for a borrowed OpenGL texture.
+    ///
+    /// The texture must be bindable against the `GL_TEXTURE_2D` target, have `GL_RGBA` as format
+    /// for the pixel data.
+    ///
+    /// By default, when Slint renders the texture, it assumes that the origin of the texture is at the top-left.
+    /// This is different from the default OpenGL coordinate system. Use the `mirror_vertically` function
+    /// to reconfigure this.
+    ///
+    /// # Safety
+    ///
+    /// This function is unsafe because invalid texture ids may lead to undefind behavior in OpenGL
+    /// drivers. A valid texture id is one that was created by the same OpenGL context that is
+    /// current during any of the invocations of the callback set on [`Window::set_rendering_notifier()`](crate::api::Window::set_rendering_notifier).
+    /// OpenGL contexts between instances of [`slint::Window`](crate::api::Window) are not sharing resources. Consequently
+    /// [`slint::Image`](Self) objects created from borrowed OpenGL textures cannot be shared between
+    /// different windows.
+    #[allow(unsafe_code)]
+    pub unsafe fn new_gl_2d_rgba_texture(texture_id: core::num::NonZeroU32, size: IntSize) -> Self {
+        Self(BorrowedOpenGLTexture { texture_id, size, origin: Default::default() })
+    }
+
+    /// Configures the texture to be rendered vertically mirrored.
+    pub fn origin(mut self, origin: BorrowedOpenGLTextureOrigin) -> Self {
+        self.0.origin = origin;
+        self
+    }
+
+    /// Completes the process of building a slint::Image that holds a borrowed OpenGL texture.
+    pub fn build(self) -> Image {
+        Image(ImageInner::BorrowedOpenGLTexture(self.0))
     }
 }
 
@@ -740,21 +846,23 @@ pub(crate) mod ffi {
         a: u8,
     }
 
+    #[cfg(feature = "image-decoders")]
     #[no_mangle]
     pub unsafe extern "C" fn slint_image_load_from_path(path: &SharedString, image: *mut Image) {
-        std::ptr::write(
+        core::ptr::write(
             image,
             Image::load_from_path(std::path::Path::new(path.as_str())).unwrap_or(Image::default()),
         )
     }
 
+    #[cfg(feature = "std")]
     #[no_mangle]
     pub unsafe extern "C" fn slint_image_load_from_embedded_data(
         data: Slice<'static, u8>,
         format: Slice<'static, u8>,
         image: *mut Image,
     ) {
-        std::ptr::write(image, super::load_image_from_embedded_data(data, format));
+        core::ptr::write(image, super::load_image_from_embedded_data(data, format));
     }
 
     #[no_mangle]
@@ -780,4 +888,29 @@ pub(crate) mod ffi {
     ) {
         core::ptr::write(image, Image::from(ImageInner::StaticTextures(textures)));
     }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn slint_image_compare_equal(image1: &Image, image2: &Image) -> bool {
+        return image1.eq(image2);
+    }
+}
+
+/// This structure contains fields to identify and render an OpenGL texture that Slint borrows from the application code.
+/// Use this to embed a native OpenGL texture into a Slint scene.
+///
+/// The ownership of the texture remains with the application. It is the application's responsibility to delete the texture
+/// when it is not used anymore.
+///
+/// Note that only 2D RGBA textures are supported.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+#[cfg(not(target_arch = "wasm32"))]
+#[repr(C)]
+pub struct BorrowedOpenGLTexture {
+    /// The id or name of the texture, as created by [`glGenTextures`](https://registry.khronos.org/OpenGL-Refpages/gl4/html/glGenTextures.xhtml).
+    pub texture_id: core::num::NonZeroU32,
+    /// The size of the texture in pixels.
+    pub size: IntSize,
+    /// Origin of the texture when rendering.
+    pub origin: BorrowedOpenGLTextureOrigin,
 }

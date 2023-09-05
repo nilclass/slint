@@ -1,12 +1,12 @@
-# Copyright © SixtyFPS GmbH <info@slint-ui.com>
-# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+# Copyright © SixtyFPS GmbH <info@slint.dev>
+# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 [package]
 name = "slint-interpreter"
-version = "1.0.3"
-authors = ["Slint Developers <info@slint-ui.com>"]
+version = "1.2.0"
+authors = ["Slint Developers <info@slint.dev>"]
 edition = "2021"
-license = "GPL-3.0-only OR LicenseRef-Slint-commercial"
+license = "GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial"
 description = "Interpreter library for Slint"
 repository = "https://github.com/slint-ui/slint"
 homepage = "https://slint.rs"
@@ -19,13 +19,14 @@ path = "lib.rs"
 
 [features]
 
-default = ["std", "backend-winit", "renderer-winit-femtovg", "backend-qt", "compat-1-0"]
+default = ["std", "backend-winit", "renderer-femtovg", "backend-qt", "accessibility", "compat-1-2"]
 
 ## Mandatory feature:
-## This feature is required to keep the compatibility with Slint 1.0
+## This feature is required to keep the compatibility with Slint 1.2
 ## Newer patch version may put current functionality behind a new feature
 ## that would be enabled by default only if this feature was added
-"compat-1-0" = []
+"compat-1-2" = []
+"compat-1-0" = ["compat-1-2"]
 
 ## enable the [`print_diagnostics`] function to show diagnostic in the console output
 display-diagnostics = ["i-slint-compiler/display-diagnostics"]
@@ -63,27 +64,44 @@ backend-winit-x11 = ["i-slint-backend-selector/backend-winit-x11", "std"]
 ## with support for the Wayland window system on Unix.
 backend-winit-wayland = ["i-slint-backend-selector/backend-winit-wayland", "std"]
 
+## Vulkan/EGL and libinput on Linux are used to render the application in full screen mode, without any
+## windowing system.
+backend-linuxkms = ["i-slint-backend-selector/backend-linuxkms", "std"]
+
 ## Make the winit backend capable of rendering using the [femtovg](https://crates.io/crates/femtovg) crate.
-## Must be used in combination with `backend-winit`, `backend-winit-x11`, or `backend-winit-wayland`.
-renderer-winit-femtovg = ["i-slint-backend-selector/renderer-winit-femtovg", "std"]
+renderer-femtovg = ["i-slint-backend-selector/renderer-femtovg", "std"]
 
 ## Make the winit backend capable of rendering using [Skia](https://skia.org/).
 ## Must be used in combination with `backend-winit`, `backend-winit-x11`, or `backend-winit-wayland`.
-renderer-winit-skia = ["i-slint-backend-selector/renderer-winit-skia", "std"]
+renderer-skia = ["i-slint-backend-selector/renderer-skia", "std"]
 
-## Same as `renderer-winit-skia`, but Skia will always use OpenGL.
-renderer-winit-skia-opengl = ["i-slint-backend-selector/renderer-winit-skia-opengl", "std"]
+## Same as `renderer-skia`, but Skia will always use OpenGL.
+renderer-skia-opengl = ["i-slint-backend-selector/renderer-skia-opengl", "std"]
+
+## Same as `renderer-skia`, but Skia will always use Vulkan.
+renderer-skia-vulkan = ["i-slint-backend-selector/renderer-skia-vulkan", "std"]
 
 ## Make the winit backend capable of rendering using the software renderer.
-## Must be used in combination with `backend-winit`, `backend-winit-x11`, or `backend-winit-wayland`.
-renderer-winit-software = ["i-slint-backend-selector/renderer-winit-software"]
+renderer-software = ["i-slint-backend-selector/renderer-software"]
 
+# deprecated aliases
+renderer-winit-femtovg = ["renderer-femtovg"]
+renderer-winit-skia = ["renderer-skia"]
+renderer-winit-skia-opengl= ["renderer-skia-opengl"]
+renderer-winit-skia-vulkan= ["renderer-skia-vulkan"]
+renderer-winit-software = ["renderer-software"]
+
+## Enable integration with operating system provided accessibility APIs (default: enabled)
+##
+## Enabling this feature will try to expose the tree of UI elements to OS provided accessibility
+## APIs to support screen readers and other assistive technologies.
+accessibility = ["i-slint-backend-selector/accessibility"]
 
 [dependencies]
-i-slint-compiler = { version = "=1.0.3", path = "../compiler" }
-i-slint-common = { version = "=1.0.3", path = "../common" }
-i-slint-core = { version = "=1.0.3", path = "../core", features = ["rtti"] }
-i-slint-backend-selector = { version = "=1.0.3", path = "../../internal/backends/selector", features = ["rtti"] }
+i-slint-compiler = { version = "=1.2.0", path = "../compiler" }
+i-slint-common = { version = "=1.2.0", path = "../common" }
+i-slint-core = { version = "=1.2.0", path = "../core", features = ["rtti"] }
+i-slint-backend-selector = { version = "=1.2.0", path = "../../internal/backends/selector", features = ["rtti"] }
 
 vtable = { version = "0.1.6", path="../../helper_crates/vtable" }
 
@@ -99,7 +117,7 @@ version = "0.1"
 optional = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-i-slint-backend-winit = { version = "=1.0.3", path = "../../internal/backends/winit" }
+i-slint-backend-winit = { version = "=1.2.0", path = "../../internal/backends/winit" }
 
 [dev-dependencies]
 i-slint-backend-testing = { path = "../../internal/backends/testing" }

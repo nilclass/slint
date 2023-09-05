@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 //! Passes that resolve the type of two way bindings.
 //!
@@ -116,7 +116,7 @@ fn resolve_alias(
             let nr = nr.unwrap();
             let purity = nr.element().borrow().lookup_property(nr.name()).declared_pure;
             let mut elem = elem.borrow_mut();
-            let mut decl = elem.property_declarations.get_mut(prop).unwrap();
+            let decl = elem.property_declarations.get_mut(prop).unwrap();
             if decl.pure.unwrap_or(false) != purity.unwrap_or(false) {
                 diag.push_error(
                     format!("Purity of callbacks '{prop}' and '{nr:?}' doesn't match"),

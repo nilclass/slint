@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 // cSpell: ignore powf
 
@@ -14,9 +14,8 @@ use i_slint_core::{
     },
     item_rendering::DirtyRegion,
     platform::PlatformError,
-    renderer::Renderer,
+    renderer::RendererSealed,
     software_renderer::{LineBufferProvider, MinimalSoftwareWindow},
-    window::WindowAdapterSealed,
 };
 
 pub struct SwrTestingBackend {
@@ -231,7 +230,9 @@ pub fn screenshot_render_by_line(
                 euclid::point2(0., 0.),
                 euclid::point2(buffer.width() as f32, buffer.height() as f32),
             )),
-            Some(r) => renderer.mark_dirty_region(DirtyRegion::from_untyped(&r.to_box2d().cast())),
+            Some(r) => renderer.mark_dirty_region(
+                DirtyRegion::from_untyped(&r.to_box2d().cast()) / window.scale_factor(),
+            ),
         }
         renderer.render_by_line(TestingLineBuffer {
             stride: buffer.width() as usize,

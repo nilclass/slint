@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 // cspell:ignore cppdocs pipenv pipfile
 
@@ -76,15 +76,20 @@ pub fn generate(show_warnings: bool) -> Result<(), Box<dyn std::error::Error>> {
     )
     .context("Error creating symlinks from docs source to docs build dir")?;
 
-    symlink_dir(["..", "..", "docs"].iter().collect::<PathBuf>(), docs_build_dir.join("markdown"))?;
-
     symlink_file(
         ["..", "..", "api", "cpp", "README.md"].iter().collect::<PathBuf>(),
         docs_build_dir.join("README.md"),
     )?;
 
     let generated_headers_dir = docs_build_dir.join("generated_include");
-    cbindgen::gen_all(&root, &generated_headers_dir)?;
+    let enabled_features = cbindgen::EnabledFeatures {
+        interpreter: true,
+        backend_qt: false,
+        freestanding: false,
+        renderer_software: true,
+        renderer_skia: true,
+    };
+    cbindgen::gen_all(&root, &generated_headers_dir, enabled_features)?;
 
     let pip_env = vec![(OsString::from("PIPENV_PIPFILE"), docs_source_dir.join("docs/Pipfile"))];
 

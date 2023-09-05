@@ -1,34 +1,24 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
-#[cfg(not(target_arch = "wasm32"))]
+use std::num::NonZeroU32;
+
 use glutin::{
     context::{ContextApi, ContextAttributesBuilder},
     display::GetGlDisplay,
     prelude::*,
     surface::{SurfaceAttributesBuilder, WindowSurface},
 };
-use i_slint_core::{api::PhysicalSize, platform::PlatformError};
-#[cfg(not(target_arch = "wasm32"))]
-use raw_window_handle::HasRawWindowHandle;
+use i_slint_core::platform::PlatformError;
+use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 
 pub struct OpenGLContext {
-    #[cfg(not(target_arch = "wasm32"))]
     context: glutin::context::PossiblyCurrentContext,
-    #[cfg(not(target_arch = "wasm32"))]
     surface: glutin::surface::Surface<glutin::surface::WindowSurface>,
-    #[cfg(target_arch = "wasm32")]
-    canvas: web_sys::HtmlCanvasElement,
 }
 
-impl OpenGLContext {
-    #[cfg(target_arch = "wasm32")]
-    pub fn html_canvas_element(&self) -> web_sys::HtmlCanvasElement {
-        self.canvas.clone()
-    }
-
-    pub fn ensure_current(&self) -> Result<(), PlatformError> {
-        #[cfg(not(target_arch = "wasm32"))]
+unsafe impl i_slint_renderer_femtovg::OpenGLInterface for OpenGLContext {
+    fn ensure_current(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if !self.context.is_current() {
             self.context.make_current(&self.surface).map_err(|glutin_error| -> PlatformError {
                 format!("FemtoVG: Error making context current: {glutin_error}").into()
@@ -36,9 +26,7 @@ impl OpenGLContext {
         }
         Ok(())
     }
-
-    pub fn swap_buffers(&self) -> Result<(), PlatformError> {
-        #[cfg(not(target_arch = "wasm32"))]
+    fn swap_buffers(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.surface.swap_buffers(&self.context).map_err(|glutin_error| -> PlatformError {
             format!("FemtoVG: Error swapping buffers: {glutin_error}").into()
         })?;
@@ -46,29 +34,23 @@ impl OpenGLContext {
         Ok(())
     }
 
-    pub fn ensure_resized(&self, _size: PhysicalSize) -> Result<(), PlatformError> {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let width = _size.width.try_into().map_err(|_| {
-                format!(
-                    "Attempting to create window surface with an invalid width: {}",
-                    _size.width
-                )
-            })?;
-            let height = _size.height.try_into().map_err(|_| {
-                format!(
-                    "Attempting to create window surface with an invalid height: {}",
-                    _size.height
-                )
-            })?;
+    fn resize(
+        &self,
+        width: NonZeroU32,
+        height: NonZeroU32,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.ensure_current()?;
+        self.surface.resize(&self.context, width, height);
 
-            self.ensure_current()?;
-            self.surface.resize(&self.context, width, height);
-        }
         Ok(())
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    fn get_proc_address(&self, name: &std::ffi::CStr) -> *const std::ffi::c_void {
+        self.context.display().get_proc_address(name)
+    }
+}
+
+impl OpenGLContext {
     pub fn new_context<T>(
         window_builder: winit::window::WindowBuilder,
         window_target: &winit::event_loop::EventLoopWindowTarget<T>,
@@ -101,7 +83,11 @@ impl OpenGLContext {
                 .expect("internal error: Could not find any matching GL configuration")
             })
             .map_err(|glutin_err| {
-                format!("Error creating OpenGL display with glutin: {}", glutin_err)
+                format!(
+                    "Error creating OpenGL display ({:#?}) with glutin: {}",
+                    window_target.raw_display_handle(),
+                    glutin_err
+                )
             })?;
 
         let gl_display = gl_config.display();
@@ -180,42 +166,19 @@ impl OpenGLContext {
             .into()
         })?;
 
+        // Sanity check, as all this might succeed on Windows without working GL drivers, but this will fail:
+        if context
+            .display()
+            .get_proc_address(&std::ffi::CString::new("glCreateShader").unwrap())
+            .is_null()
+        {
+            return Err(
+                "Failed to initialize OpenGL driver: Could not locate glCreateShader symbol"
+                    .to_string()
+                    .into(),
+            );
+        }
+
         Ok((window, Self { context, surface }))
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub fn new_context<T>(
-        window_builder: winit::window::WindowBuilder,
-        window_target: &winit::event_loop::EventLoopWindowTarget<T>,
-        canvas_id: &str,
-    ) -> Result<(winit::window::Window, Self), PlatformError> {
-        let window = window_builder.build(window_target).map_err(|winit_os_err| {
-            format!(
-                "FemtoVG Renderer: Could not create winit window wrapper for DOM canvas: {}",
-                winit_os_err
-            )
-        })?;
-
-        use wasm_bindgen::JsCast;
-
-        let canvas = web_sys::window()
-            .ok_or_else(|| "FemtoVG Renderer: Could not retrieve DOM window".to_string())?
-            .document()
-            .ok_or_else(|| "FemtoVG Renderer: Could not retrieve DOM document".to_string())?
-            .get_element_by_id(canvas_id)
-            .ok_or_else(|| {
-                format!("FemtoVG Renderer: Could not retrieve existing HTML Canvas element '{canvas_id}'")
-            })?
-            .dyn_into::<web_sys::HtmlCanvasElement>()
-            .map_err(|_| {
-                format!("FemtoVG Renderer: Specified DOM element '{canvas_id}' is not a HTML Canvas")
-            })?;
-
-        Ok((window, Self { canvas }))
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn get_proc_address(&self, name: &std::ffi::CStr) -> *const std::ffi::c_void {
-        self.context.display().get_proc_address(name)
     }
 }

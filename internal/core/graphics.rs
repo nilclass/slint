@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 #![warn(missing_docs)]
 /*!
@@ -145,10 +145,26 @@ pub struct FontRequest {
     /// The additional spacing (or shrinking if negative) between glyphs. This is usually not submitted to
     /// the font-subsystem but collected here for API convenience
     pub letter_spacing: Option<LogicalLength>,
+    /// Whether to select an italic face of the font family.
+    pub italic: bool,
 }
 
+#[cfg(feature = "shared-fontdb")]
+impl FontRequest {
+    /// Returns the relevant properties of this FontRequest propagated into a fontdb Query.
+    pub fn to_fontdb_query(&self) -> i_slint_common::sharedfontdb::fontdb::Query<'_> {
+        use i_slint_common::sharedfontdb::fontdb::{Query, Style, Weight};
+        Query {
+            style: if self.italic { Style::Italic } else { Style::Normal },
+            weight: Weight(self.weight.unwrap_or(/* CSS normal*/ 400) as _),
+            ..Default::default()
+        }
+    }
+}
+
+/// Internal module for use by cbindgen and the C++ platform API layer.
 #[cfg(feature = "ffi")]
-pub(crate) mod ffi {
+pub mod ffi {
     #![allow(unsafe_code)]
 
     /// Expand Rect so that cbindgen can see it. ( is in fact euclid::default::Rect<f32>)
@@ -179,5 +195,32 @@ pub(crate) mod ffi {
         y: f32,
     }
 
+    #[cfg(feature = "std")]
     pub use super::path::ffi::*;
+
+    /// Conversion function used by C++ platform API layer to
+    /// convert the PhysicalSize used in the Rust WindowAdapter API
+    /// to the ffi.
+    pub fn physical_size_from_api(
+        size: crate::api::PhysicalSize,
+    ) -> crate::graphics::euclid::default::Size2D<u32> {
+        size.to_euclid()
+    }
+
+    /// Conversion function used by C++ platform API layer to
+    /// convert the PhysicalPosition used in the Rust WindowAdapter API
+    /// to the ffi.
+    pub fn physical_position_from_api(
+        position: crate::api::PhysicalPosition,
+    ) -> crate::graphics::euclid::default::Point2D<i32> {
+        position.to_euclid()
+    }
+
+    /// Conversion function used by C++ platform API layer to
+    /// convert from the ffi to PhysicalPosition.
+    pub fn physical_position_to_api(
+        position: crate::graphics::euclid::default::Point2D<i32>,
+    ) -> crate::api::PhysicalPosition {
+        crate::api::PhysicalPosition::from_euclid(position)
+    }
 }

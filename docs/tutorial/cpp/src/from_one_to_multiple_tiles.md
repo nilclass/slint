@@ -1,3 +1,4 @@
+<!-- Copyright © SixtyFPS GmbH <info@slint.dev> ; SPDX-License-Identifier: MIT -->
 # From One To Multiple Tiles
 
 After modeling a single tile, let's create a grid of them. For the grid to be our game board, we need two features:
@@ -30,4 +31,4 @@ using the modulo and integer division to create a 4 by 4 grid.
 
 Running this gives us a window that shows 8 tiles, which can be opened individually.
 
-<video autoplay loop muted playsinline src="https://slint-ui.com/blog/memory-game-tutorial/from-one-to-multiple-tiles.mp4"></video>
+<video autoplay loop muted playsinline src="https://slint.dev/blog/memory-game-tutorial/from-one-to-multiple-tiles.mp4"></video>

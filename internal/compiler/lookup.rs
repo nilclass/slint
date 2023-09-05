@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 //! Helper to do lookup in expressions
 
@@ -131,7 +131,7 @@ pub trait LookupObject {
     /// Perform a lookup of a given identifier.
     /// One does not have to re-implement unless we can make it faster
     fn lookup(&self, ctx: &LookupCtx, name: &str) -> Option<LookupResult> {
-        self.for_each_entry(ctx, &mut |prop, expr| (prop == name).then(|| expr))
+        self.for_each_entry(ctx, &mut |prop, expr| (prop == name).then_some(expr))
     }
 }
 
@@ -318,10 +318,8 @@ impl InScopeLookup {
                         return Some(r);
                     }
                 }
-            } else {
-                if let Some(r) = visit_scope(elem) {
-                    return Some(r);
-                }
+            } else if let Some(r) = visit_scope(elem) {
+                return Some(r);
             }
         }
         None
@@ -360,7 +358,7 @@ impl LookupObject for InScopeLookup {
         }
         Self::visit_scope(
             ctx,
-            |str, r| (str == name).then(|| r),
+            |str, r| (str == name).then_some(r),
             |elem| elem.lookup(ctx, name),
             |elem| {
                 elem.borrow().property_declarations.get(name).map(|prop| {
@@ -558,7 +556,7 @@ impl ColorSpecific {
 struct KeysLookup;
 
 macro_rules! special_keys_lookup {
-    ($($char:literal # $name:ident # $($qt:ident)|* # $($winit:ident)|* ;)*) => {
+    ($($char:literal # $name:ident # $($qt:ident)|* # $($winit:ident)|* # $($_xkb:ident)|*;)*) => {
         impl LookupObject for KeysLookup {
             fn for_each_entry<R>(
                 &self,
@@ -857,6 +855,9 @@ impl<'a> LookupObject for ColorExpression<'a> {
         };
         None.or_else(|| f("brighter", member_function(BuiltinFunction::ColorBrighter)))
             .or_else(|| f("darker", member_function(BuiltinFunction::ColorDarker)))
+            .or_else(|| f("transparentize", member_function(BuiltinFunction::ColorTransparentize)))
+            .or_else(|| f("with-alpha", member_function(BuiltinFunction::ColorWithAlpha)))
+            .or_else(|| f("mix", member_function(BuiltinFunction::ColorMix)))
     }
 }
 

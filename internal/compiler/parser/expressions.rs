@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 use super::document::parse_qualified_name;
 use super::prelude::*;
@@ -212,6 +212,7 @@ fn parse_expression_helper(p: &mut impl Parser, precedence: OperatorPrecedence) 
 /// ```test
 /// @image-url("/foo/bar.png")
 /// @linear-gradient(0deg, blue, red)
+/// @tr("foo", bar)
 /// ```
 fn parse_at_keyword(p: &mut impl Parser) {
     debug_assert_eq!(p.peek().kind(), SyntaxKind::At);
@@ -230,10 +231,13 @@ fn parse_at_keyword(p: &mut impl Parser) {
         "radial-gradient" | "radial_gradient" => {
             parse_gradient(p);
         }
+        "tr" => {
+            parse_tr(p);
+        }
         _ => {
             p.consume();
             p.test(SyntaxKind::Identifier); // consume the identifier, so that autocomplete works
-            p.error("Expected 'image-url', 'linear-gradient' or 'radial-gradient' after '@'");
+            p.error("Expected 'image-url', 'tr', 'linear-gradient' or 'radial-gradient' after '@'");
         }
     }
 }
@@ -350,4 +354,60 @@ fn parse_gradient(p: &mut impl Parser) {
         }
         p.test(SyntaxKind::Comma);
     }
+}
+
+#[cfg_attr(test, parser_test)]
+/// ```test,AtTr
+/// @tr("foo")
+/// @tr("foo{0}", bar(42))
+/// @tr("context" => "ccc{}", 0)
+/// @tr("xxx" => "ccc{n}" | "ddd{}" % 42, 45)
+/// ```
+fn parse_tr(p: &mut impl Parser) {
+    let mut p = p.start_node(SyntaxKind::AtTr);
+    p.expect(SyntaxKind::At);
+    debug_assert_eq!(p.peek().as_str(), "tr");
+    p.expect(SyntaxKind::Identifier); //"tr"
+    p.expect(SyntaxKind::LParent);
+
+    let checkpoint = p.checkpoint();
+
+    fn consume_literal(p: &mut impl Parser) -> bool {
+        let peek = p.peek();
+        if peek.kind() != SyntaxKind::StringLiteral
+            || !peek.as_str().starts_with('"')
+            || !peek.as_str().ends_with('"')
+        {
+            p.error("Expected plain string literal");
+            return false;
+        }
+        p.expect(SyntaxKind::StringLiteral)
+    }
+
+    if !consume_literal(&mut *p) {
+        return;
+    }
+
+    if p.test(SyntaxKind::FatArrow) {
+        drop(p.start_node_at(checkpoint, SyntaxKind::TrContext));
+        if !consume_literal(&mut *p) {
+            return;
+        }
+    }
+
+    if p.peek().kind() == SyntaxKind::Pipe {
+        let mut p = p.start_node(SyntaxKind::TrPlural);
+        p.consume();
+        if !consume_literal(&mut *p) || !p.expect(SyntaxKind::Percent) || !parse_expression(&mut *p)
+        {
+            return;
+        }
+    }
+
+    while p.test(SyntaxKind::Comma) {
+        if !parse_expression(&mut *p) {
+            break;
+        }
+    }
+    p.expect(SyntaxKind::RParent);
 }

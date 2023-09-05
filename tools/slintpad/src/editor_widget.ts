@@ -1,7 +1,7 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
-// cSpell: ignore lumino inmemory mimetypes printerdemo
+// cSpell: ignore edcore lumino inmemory mimetypes printerdemo
 //
 import "monaco-editor/esm/vs/editor/edcore.main.js";
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api";
@@ -34,7 +34,7 @@ export component Demo {
             horizontal-alignment: center;
         }
         Image {
-            source: @image-url("https://slint-ui.com/logo/slint-logo-full-light.svg");
+            source: @image-url("https://slint.dev/logo/slint-logo-full-light.svg");
             height: 100px;
         }
         HorizontalLayout { alignment: center; Button { text: "OK!"; } }
@@ -849,7 +849,8 @@ export class EditorWidget extends Widget {
 
     async set_demo(location: string) {
         if (location) {
-            let tag = "master";
+            const default_tag = "XXXX_DEFAULT_TAG_XXXX";
+            let tag = default_tag.startsWith("XXXX_DEFAULT_TAG_") ? "master" : default_tag;
             {
                 let found;
                 if (

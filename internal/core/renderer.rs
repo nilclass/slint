@@ -1,13 +1,28 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 use alloc::boxed::Box;
+use alloc::rc::Rc;
 use core::pin::Pin;
 
+use crate::api::PlatformError;
 use crate::component::ComponentRef;
 use crate::lengths::{LogicalLength, LogicalPoint, LogicalRect, LogicalSize, ScaleFactor};
+use crate::window::WindowAdapter;
 
-pub trait Renderer {
+/// This trait represents a Renderer that can render a slint scene.
+///
+/// This trait is [sealed](https://rust-lang.github.io/api-guidelines/future-proofing.html#sealed-traits-protect-against-downstream-implementations-c-sealed),
+/// meaning that you are not expected to implement this trait
+/// yourself, but you should use the provided one from Slint such as
+/// [`SoftwareRenderer`](crate::software_renderer::SoftwareRenderer)
+pub trait Renderer: RendererSealed {}
+impl<T: RendererSealed> Renderer for T {}
+
+/// Implementation details behind [`Renderer`], but since this
+/// trait is not exported in the public API, it is not possible for the
+/// users to re-implement these functions.
+pub trait RendererSealed {
     /// Returns the size of the given text in logical pixels.
     /// When set, `max_width` means that one need to wrap the text so it does not go further than that
     fn text_size(
@@ -26,6 +41,8 @@ pub trait Renderer {
         &self,
         text_input: Pin<&crate::items::TextInput>,
         pos: LogicalPoint,
+        font_request: crate::graphics::FontRequest,
+        scale_factor: ScaleFactor,
     ) -> usize;
 
     /// That's the opposite of [`Self::text_input_byte_offset_for_position`]
@@ -35,6 +52,8 @@ pub trait Renderer {
         &self,
         text_input: Pin<&crate::items::TextInput>,
         byte_offset: usize,
+        font_request: crate::graphics::FontRequest,
+        scale_factor: ScaleFactor,
     ) -> LogicalRect;
 
     /// Clear the caches for the items that are being removed
@@ -87,4 +106,10 @@ pub trait Renderer {
     }
 
     fn default_font_size(&self) -> LogicalLength;
+
+    fn set_window_adapter(&self, _window_adapter: &Rc<dyn WindowAdapter>);
+
+    fn resize(&self, _size: crate::api::PhysicalSize) -> Result<(), PlatformError> {
+        Ok(())
+    }
 }

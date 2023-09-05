@@ -1,3 +1,4 @@
+<!-- Copyright © SixtyFPS GmbH <info@slint.dev> ; SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial -->
 # Editor Configuration for Slint
 
 This folder contains extensions or configuration files for different editor to better support .slint files.
@@ -154,7 +155,7 @@ To setup the LSP:
    https://raw.githubusercontent.com/slint-ui/slint/master/editors/sublime/Slint.tmPreferences
 4. Download the LSP package settings file into your User Package folder:
    https://raw.githubusercontent.com/slint-ui/slint/master/editors/sublime/LSP.sublime-settings
-5. Modify the slint-lsp command path in `LSP.sublime-settings` to point to the cargo instalation path in your home folder (**Replace YOUR_USER by your username**):
+5. Modify the slint-lsp command path in `LSP.sublime-settings` to point to the cargo installation path in your home folder (**Replace YOUR_USER by your username**):
    `"command": ["/home/YOUR_USER/.cargo/bin/slint-lsp"]`
 6. Run "LSP: Enable Language Server Globally" or "LSP: Enable Lanuage Server in Project" from Sublime's Command Palette to allow the server to start.
 7. Open a .slint file - if the server starts its name will be in the left side of the status bar.
@@ -165,6 +166,8 @@ will appear on the right of the editor pane.
 
 ## JetBrains IDE
 Tested with: CLion 2022.1 (on linux)
+
+Tested and doesn't work with CLion 2023.1+ (on Linux). Plugin is no longer maintained.
 
 *Note: This may/should work for other JetBrains-products also. If you test it please add your results to the above list.*
 

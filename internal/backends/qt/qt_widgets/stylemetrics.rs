@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 // cSpell: ignore deinit
 
@@ -119,7 +119,7 @@ impl NativeStyleMetrics {
             return qApp->palette().color(QPalette::Window).rgba();
         });
         let window_background = Color::from_argb_encoded(window_background);
-        self.window_background.set(window_background.into());
+        self.window_background.set(window_background);
         let default_text_color = cpp!(unsafe[] -> u32 as "QRgb" {
             return qApp->palette().color(QPalette::WindowText).rgba();
         });

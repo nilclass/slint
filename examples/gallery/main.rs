@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: MIT
 
 #![deny(unsafe_code)]
 
@@ -18,6 +18,8 @@ pub fn main() {
     // It's disabled in release mode so it doesn't bloat up the file size.
     #[cfg(all(debug_assertions, target_arch = "wasm32"))]
     console_error_panic_hook::set_once();
+
+    slint::init_translations!(concat!(env!("CARGO_MANIFEST_DIR"), "/lang/"));
 
     let app = App::new().unwrap();
 

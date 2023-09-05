@@ -1,8 +1,9 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 #pragma once
 #include <string_view>
+#include <span>
 #include "slint_generated_public.h"
 #include "slint_size.h"
 #include "slint_image_internal.h"
@@ -109,14 +110,64 @@ private:
 struct Image
 {
 public:
+    /// This enum describes the origin to use when rendering a borrowed OpenGL texture.
+    enum class BorrowedOpenGLTextureOrigin {
+        /// The top-left of the texture is the top-left of the texture drawn on the screen.
+        TopLeft,
+        /// The bottom-left of the texture is the top-left of the texture draw on the screen,
+        /// flipping it vertically.
+        BottomLeft,
+    };
+
     Image() : data(Data::ImageInner_None()) { }
 
+#ifndef SLINT_FEATURE_FREESTANDING
     /// Load an image from an image file
-    static Image load_from_path(const SharedString &file_path)
+    [[nodiscard]] static Image load_from_path(const SharedString &file_path)
     {
         Image img;
         cbindgen_private::types::slint_image_load_from_path(&file_path, &img.data);
         return img;
+    }
+#endif
+
+    /// Constructs a new Image from an existing OpenGL texture. The texture remains borrowed by
+    /// Slint for the duration of being used for rendering, such as when assigned as source property
+    /// to an `Image` element. It's the application's responsibility to delete the texture when it
+    /// is not used anymore.
+    ///
+    /// The texture must be bindable against the `GL_TEXTURE_2D` target, have `GL_RGBA` as format
+    /// for the pixel data.
+    ///
+    /// When Slint renders the texture, it assumes that the origin of the texture is at the
+    /// top-left. This is different from the default OpenGL coordinate system. If you want to
+    /// flip the origin, use BorrowedOpenGLTextureOrigin::BottomLeft.
+    ///
+    /// Safety:
+    ///
+    /// This function is unsafe because invalid texture ids may lead to undefind behavior in OpenGL
+    /// drivers. A valid texture id is one that was created by the same OpenGL context that is
+    /// current during any of the invocations of the callback set on
+    /// [`Window::set_rendering_notifier()`]. OpenGL contexts between instances of [`slint::Window`]
+    /// are not sharing resources. Consequently
+    /// [`slint::Image`] objects created from borrowed OpenGL textures cannot be shared between
+    /// different windows.
+    [[nodiscard]] static Image create_from_borrowed_gl_2d_rgba_texture(
+            uint32_t texture_id, Size<uint32_t> size,
+            BorrowedOpenGLTextureOrigin origin = BorrowedOpenGLTextureOrigin::TopLeft)
+    {
+        cbindgen_private::types::BorrowedOpenGLTextureOrigin origin_private =
+                origin == BorrowedOpenGLTextureOrigin::TopLeft
+                ? cbindgen_private::types::BorrowedOpenGLTextureOrigin::TopLeft
+                : cbindgen_private::types::BorrowedOpenGLTextureOrigin::BottomLeft;
+        return Image(Data::ImageInner_BorrowedOpenGLTexture(
+                cbindgen_private::types::BorrowedOpenGLTexture {
+                        texture_id,
+                        size,
+                        origin_private,
+                })
+
+        );
     }
 
     /// Construct an image from a SharedPixelBuffer of RGB pixels.
@@ -144,7 +195,10 @@ public:
     }
 
     /// Returns the size of the Image in pixels.
-    Size<unsigned int> size() const { return cbindgen_private::types::slint_image_size(&data); }
+    Size<uint32_t> size() const
+    {
+        return cbindgen_private::types::slint_image_size(&data);
+    }
 
     /// Returns the path of the image on disk, if it was constructed via Image::load_from_path().
     std::optional<slint::SharedString> path() const
@@ -157,9 +211,15 @@ public:
     }
 
     /// Returns true if \a a refers to the same image as \a b; false otherwise.
-    friend bool operator==(const Image &a, const Image &b) { return a.data == b.data; }
+    friend bool operator==(const Image &a, const Image &b)
+    {
+        return cbindgen_private::types::slint_image_compare_equal(&a.data, &b.data);
+    }
     /// Returns false if \a a refers to the same image as \a b; true otherwise.
-    friend bool operator!=(const Image &a, const Image &b) { return a.data != b.data; }
+    friend bool operator!=(const Image &a, const Image &b)
+    {
+        return !(a == b);
+    }
 
     /// \private
     explicit Image(cbindgen_private::types::Image inner) : data(inner) { }

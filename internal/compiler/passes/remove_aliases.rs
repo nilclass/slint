@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 //! This pass removes the property used in a two ways bindings
 
@@ -190,8 +190,14 @@ pub fn remove_aliases(doc: &Document, diag: &mut BuildDiagnostics) {
                 }
             } else {
                 // This is not a declaration, we must re-create the binding
-                elem.bindings
-                    .insert(remove.name().to_owned(), BindingExpression::new_two_way(to).into());
+                elem.bindings.insert(
+                    remove.name().to_owned(),
+                    BindingExpression::new_two_way(to.clone()).into(),
+                );
+                drop(elem);
+                if remove.is_externally_modified() {
+                    to.mark_as_set();
+                }
             }
         }
     }

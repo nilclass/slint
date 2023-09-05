@@ -1,12 +1,13 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 use core::convert::TryFrom;
 use i_slint_compiler::langtype::Type as LangType;
+use i_slint_core::component_factory::ComponentFactory;
 use i_slint_core::graphics::Image;
 use i_slint_core::model::{Model, ModelRc};
 use i_slint_core::window::WindowInner;
-use i_slint_core::{Brush, PathData, SharedString, SharedVector};
+use i_slint_core::{Brush, PathData, SharedVector};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::iter::FromIterator;
@@ -17,8 +18,9 @@ use std::rc::Rc;
 pub use i_slint_compiler::diagnostics::{Diagnostic, DiagnosticLevel};
 
 pub use i_slint_core::api::*;
+use i_slint_core::items::*;
 
-use crate::dynamic_component::ErasedComponentBox;
+use crate::dynamic_component::{ErasedComponentBox, WindowOptions};
 
 /// This enum represents the different public variants of the [`Value`] enum, without
 /// the contained values.
@@ -60,6 +62,7 @@ impl From<LangType> for ValueType {
             | LangType::UnitProduct(_) => Self::Number,
             LangType::String => Self::String,
             LangType::Color => Self::Brush,
+            LangType::Brush => Self::Brush,
             LangType::Array(_) => Self::Model,
             LangType::Bool => Self::Bool,
             LangType::Struct { .. } => Self::Struct,
@@ -115,6 +118,9 @@ pub enum Value {
     EnumerationValue(String, String) = 10,
     #[doc(hidden)]
     LayoutCache(SharedVector<f32>) = 11,
+    #[doc(hidden)]
+    /// Correspond to the `component-factory` type in .slint
+    ComponentFactory(ComponentFactory) = 12,
 }
 
 impl Value {
@@ -157,6 +163,9 @@ impl PartialEq for Value {
                 matches!(other, Value::EnumerationValue(rhs_name, rhs_value) if lhs_name == rhs_name && lhs_value == rhs_value)
             }
             Value::LayoutCache(lhs) => matches!(other, Value::LayoutCache(rhs) if lhs == rhs),
+            Value::ComponentFactory(lhs) => {
+                matches!(other, Value::ComponentFactory(rhs) if lhs == rhs)
+            }
         }
     }
 }
@@ -180,6 +189,7 @@ impl std::fmt::Debug for Value {
             Value::EasingCurve(c) => write!(f, "Value::EasingCurve({:?})", c),
             Value::EnumerationValue(n, v) => write!(f, "Value::EnumerationValue({:?}, {:?})", n, v),
             Value::LayoutCache(v) => write!(f, "Value::LayoutCache({:?})", v),
+            Value::ComponentFactory(factory) => write!(f, "Value::ComponentFactory({:?})", factory),
         }
     }
 }
@@ -221,8 +231,9 @@ declare_value_conversion!(Brush => [Brush] );
 declare_value_conversion!(PathData => [PathData]);
 declare_value_conversion!(EasingCurve => [i_slint_core::animations::EasingCurve]);
 declare_value_conversion!(LayoutCache => [SharedVector<f32>] );
+declare_value_conversion!(ComponentFactory => [ComponentFactory] );
 
-/// Implement From / TryFrom for Value that convert a `struct` to/from `Value::Object`
+/// Implement From / TryFrom for Value that convert a `struct` to/from `Value::Struct`
 macro_rules! declare_value_struct_conversion {
     (struct $name:path { $($field:ident),* $(, ..$extra:expr)? }) => {
         impl From<$name> for Value {
@@ -235,6 +246,7 @@ macro_rules! declare_value_struct_conversion {
         impl TryFrom<Value> for $name {
             type Error = ();
             fn try_from(v: Value) -> Result<$name, Self::Error> {
+                #[allow(clippy::field_reassign_with_default)]
                 match v {
                     Value::Struct(x) => {
                         type Ty = $name;
@@ -249,16 +261,64 @@ macro_rules! declare_value_struct_conversion {
             }
         }
     };
+    ($(
+        $(#[$struct_attr:meta])*
+        struct $Name:ident {
+            @name = $inner_name:literal
+            export {
+                $( $(#[$pub_attr:meta])* $pub_field:ident : $pub_type:ty, )*
+            }
+            private {
+                $( $(#[$pri_attr:meta])* $pri_field:ident : $pri_type:ty, )*
+            }
+        }
+    )*) => {
+        $(
+            impl From<$Name> for Value {
+                fn from(item: $Name) -> Self {
+                    let mut struct_ = Struct::default();
+                    $(struct_.set_field(stringify!($pub_field).into(), item.$pub_field.into());)*
+                    $(handle_private!(SET $Name $pri_field, struct_, item);)*
+                    Value::Struct(struct_)
+                }
+            }
+            impl TryFrom<Value> for $Name {
+                type Error = ();
+                fn try_from(v: Value) -> Result<$Name, Self::Error> {
+                    #[allow(clippy::field_reassign_with_default)]
+                    match v {
+                        Value::Struct(x) => {
+                            type Ty = $Name;
+                            #[allow(unused)]
+                            let mut res: Ty = Ty::default();
+                            $(res.$pub_field = x.get_field(stringify!($pub_field)).ok_or(())?.clone().try_into().map_err(|_|())?;)*
+                            $(handle_private!(GET $Name $pri_field, x, res);)*
+                            Ok(res)
+                        }
+                        _ => Err(()),
+                    }
+                }
+            }
+        )*
+    };
 }
 
-declare_value_struct_conversion!(struct i_slint_core::model::StandardListViewItem { text , ..Default::default()});
-declare_value_struct_conversion!(struct i_slint_core::model::TableColumn { title, min_width, horizontal_stretch, sort_order, width, ..Default::default()  });
-declare_value_struct_conversion!(struct i_slint_core::properties::StateInfo { current_state, previous_state, change_time });
-declare_value_struct_conversion!(struct i_slint_core::input::KeyboardModifiers { control, alt, shift, meta });
-declare_value_struct_conversion!(struct i_slint_core::input::KeyEvent { text, modifiers, ..Default::default() });
+macro_rules! handle_private {
+    (SET StateInfo $field:ident, $struct_:ident, $item:ident) => {
+        $struct_.set_field(stringify!($field).into(), $item.$field.into())
+    };
+    (SET $_:ident $field:ident, $struct_:ident, $item:ident) => {{}};
+    (GET StateInfo $field:ident, $struct_:ident, $item:ident) => {
+        $item.$field =
+            $struct_.get_field(stringify!($field)).ok_or(())?.clone().try_into().map_err(|_| ())?
+    };
+    (GET $_:ident $field:ident, $struct_:ident, $item:ident) => {{}};
+}
+
 declare_value_struct_conversion!(struct i_slint_core::layout::LayoutInfo { min, max, min_percent, max_percent, preferred, stretch });
 declare_value_struct_conversion!(struct i_slint_core::graphics::Point { x, y, ..Default::default()});
-declare_value_struct_conversion!(struct i_slint_core::items::PointerEvent { kind, button });
+
+i_slint_common::for_each_builtin_structs!(declare_value_struct_conversion);
 
 /// Implement From / TryFrom for Value that convert an `enum` to/from `Value::EnumerationValue`
 ///
@@ -480,6 +540,11 @@ impl ComponentCompiler {
         self.config.style.as_ref()
     }
 
+    /// The domain used for translations
+    pub fn set_translation_domain(&mut self, domain: String) {
+        self.config.translation_domain = Some(domain);
+    }
+
     /// Sets the callback that will be invoked when loading imported .slint files. The specified
     /// `file_loader_callback` parameter will be called with a canonical file path as argument
     /// and is expected to return a future that, when resolved, provides the source code of the
@@ -516,6 +581,7 @@ impl ComponentCompiler {
     /// Diagnostics from previous calls are cleared when calling this function.
     ///
     /// If the path is `"-"`, the file will be read from stdin.
+    /// If the extension of the file .rs, the first `slint!` macro from a rust file will be extracted
     ///
     /// This function is `async` but in practice, this is only asynchronous if
     /// [`Self::set_file_loader`] was called and its future is actually asynchronous.
@@ -586,14 +652,9 @@ impl ComponentDefinition {
     /// Creates a new instance of the component and returns a shared handle to it.
     pub fn create(&self) -> Result<ComponentInstance, PlatformError> {
         generativity::make_guard!(guard);
-        self.inner
-            .unerase(guard)
-            .clone()
-            .create(
-                #[cfg(target_arch = "wasm32")]
-                "canvas".into(),
-            )
-            .map(|inner| ComponentInstance { inner })
+        Ok(ComponentInstance {
+            inner: self.inner.unerase(guard).clone().create(Default::default())?,
+        })
     }
 
     /// Instantiate the component for wasm using the given canvas id
@@ -603,24 +664,27 @@ impl ComponentDefinition {
         canvas_id: &str,
     ) -> Result<ComponentInstance, PlatformError> {
         generativity::make_guard!(guard);
-        self.inner
-            .unerase(guard)
-            .clone()
-            .create(canvas_id.into())
-            .map(|inner| ComponentInstance { inner })
-    }
-
-    /// Instantiate the component using an existing window.
-    #[doc(hidden)]
-    pub fn create_with_existing_window(&self, window: &Window) -> ComponentInstance {
-        generativity::make_guard!(guard);
-        ComponentInstance {
+        Ok(ComponentInstance {
             inner: self
                 .inner
                 .unerase(guard)
                 .clone()
-                .create_with_existing_window(&WindowInner::from_pub(window).window_adapter()),
-        }
+                .create(WindowOptions::CreateWithCanvasId(canvas_id.into()))?,
+        })
+    }
+
+    /// Instantiate the component using an existing window.
+    #[doc(hidden)]
+    pub fn create_with_existing_window(
+        &self,
+        window: &Window,
+    ) -> Result<ComponentInstance, PlatformError> {
+        generativity::make_guard!(guard);
+        Ok(ComponentInstance {
+            inner: self.inner.unerase(guard).clone().create(WindowOptions::UseExistingWindow(
+                WindowInner::from_pub(window).window_adapter(),
+            ))?,
+        })
     }
 
     /// List of publicly declared properties or callback.
@@ -636,7 +700,8 @@ impl ComponentDefinition {
         self.inner.unerase(guard).properties()
     }
 
-    /// List of publicly declared properties.
+    /// Returns an interator over all publicly declared properties. Each iterator item is a tuple of property name
+    /// and property type for each of them.
     pub fn properties(&self) -> impl Iterator<Item = (String, ValueType)> + '_ {
         // We create here a 'static guard, because unfortunately the returned type would be restricted to the guard lifetime
         // which is not required, but this is safe because there is only one instance of the unerased type
@@ -673,6 +738,20 @@ impl ComponentDefinition {
         // which is not required, but this is safe because there is only one instance of the unerased type
         let guard = unsafe { generativity::Guard::new(generativity::Id::new()) };
         self.inner.unerase(guard).global_names()
+    }
+
+    /// List of publicly declared properties or callback in the exported global singleton specified by its name.
+    ///
+    /// This is internal because it exposes the `Type` from compilerlib.
+    #[doc(hidden)]
+    pub fn global_properties_and_callbacks(
+        &self,
+        global_name: &str,
+    ) -> Option<impl Iterator<Item = (String, i_slint_compiler::langtype::Type)> + '_> {
+        // We create here a 'static guard, because unfortunately the returned type would be restricted to the guard lifetime
+        // which is not required, but this is safe because there is only one instance of the unerased type
+        let guard = unsafe { generativity::Guard::new(generativity::Id::new()) };
+        self.inner.unerase(guard).global_properties(global_name)
     }
 
     /// List of publicly declared properties in the exported global singleton specified by its name.
@@ -757,6 +836,7 @@ impl ComponentInstance {
     /// ## Examples
     ///
     /// ```
+    /// # i_slint_backend_testing::init();
     /// use slint_interpreter::{ComponentDefinition, ComponentCompiler, Value, SharedString};
     /// let code = r#"
     ///     export component MyWin inherits Window {
@@ -792,7 +872,7 @@ impl ComponentInstance {
             .map_err(|()| GetPropertyError::NoSuchProperty)
     }
 
-    /// Set the value for a public property of this component
+    /// Set the value for a public property of this component.
     pub fn set_property(&self, name: &str, value: Value) -> Result<(), SetPropertyError> {
         let name = normalize_identifier(name);
         generativity::make_guard!(guard);
@@ -823,6 +903,7 @@ impl ComponentInstance {
     /// ## Examples
     ///
     /// ```
+    /// # i_slint_backend_testing::init();
     /// use slint_interpreter::{ComponentDefinition, ComponentCompiler, Value, SharedString, ComponentHandle};
     /// use core::convert::TryInto;
     /// let code = r#"
@@ -878,6 +959,7 @@ impl ComponentInstance {
     /// ## Examples
     ///
     /// ```
+    /// # i_slint_backend_testing::init();
     /// use slint_interpreter::{ComponentDefinition, ComponentCompiler, Value, SharedString};
     /// let code = r#"
     ///     global Glob {
@@ -932,6 +1014,7 @@ impl ComponentInstance {
     /// ## Examples
     ///
     /// ```
+    /// # i_slint_backend_testing::init();
     /// use slint_interpreter::{ComponentDefinition, ComponentCompiler, Value, SharedString};
     /// use core::convert::TryInto;
     /// let code = r#"
@@ -1028,9 +1111,12 @@ impl ComponentInstance {
 
     /// Register callback to handle current item information
     ///
+    /// The callback will be called with the file name, the start line and column
+    /// followed by the end line and column.
+    ///
     /// WARNING: this is not part of the public API
     #[cfg(feature = "highlight")]
-    pub fn on_element_selected(&self, callback: Box<dyn Fn(&str, u32, u32, u32, u32) -> ()>) {
+    pub fn on_element_selected(&self, callback: Box<dyn Fn(&str, u32, u32, u32, u32)>) {
         crate::highlight::on_element_selected(&self.inner, callback);
     }
 }
@@ -1056,15 +1142,11 @@ impl ComponentHandle for ComponentInstance {
     }
 
     fn show(&self) -> Result<(), PlatformError> {
-        generativity::make_guard!(guard);
-        let comp = self.inner.unerase(guard);
-        comp.borrow_instance().window_adapter().window().show()
+        self.inner.window_adapter_ref()?.window().show()
     }
 
     fn hide(&self) -> Result<(), PlatformError> {
-        generativity::make_guard!(guard);
-        let comp = self.inner.unerase(guard);
-        comp.borrow_instance().window_adapter().window().hide()
+        self.inner.window_adapter_ref()?.window().hide()
     }
 
     fn run(&self) -> Result<(), PlatformError> {
@@ -1074,7 +1156,7 @@ impl ComponentHandle for ComponentInstance {
     }
 
     fn window(&self) -> &Window {
-        self.inner.window_adapter().window()
+        self.inner.window_adapter_ref().unwrap().window()
     }
 
     fn global<'a, T: Global<'a, Self>>(&'a self) -> T
@@ -1106,13 +1188,17 @@ pub enum GetPropertyError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum SetPropertyError {
-    /// There is no property with the given name
+    /// There is no property with the given name.
     #[error("no such property")]
     NoSuchProperty,
-    /// The property exist but does not have a type matching the dynamic value
+    /// The property exists but does not have a type matching the dynamic value.
+    ///
+    /// This happens for example when assigning a source struct value to a target
+    /// struct property, where the source doesn't have all the fields the target struct
+    /// requires.
     #[error("wrong type")]
     WrongType,
-    /// Attempt to set an output property
+    /// Attempt to set an output property.
     #[error("access denied")]
     AccessDenied,
 }
@@ -1513,11 +1599,8 @@ fn component_definition_model_properties() {
 
     let instance = comp_def.create().unwrap();
 
-    let int_model = Value::Model(VecModel::from_slice(&[
-        Value::Number(14.),
-        Value::Number(15.),
-        Value::Number(16.),
-    ]));
+    let int_model =
+        Value::Model([Value::Number(14.), Value::Number(15.), Value::Number(16.)].into());
     let empty_model = Value::Model(ModelRc::new(VecModel::<Value>::default()));
     let model_with_string = Value::Model(VecModel::from_slice(&[
         Value::Number(1000.),
@@ -1550,6 +1633,36 @@ fn component_definition_model_properties() {
 
     assert_eq!(instance.set_property("prop", empty_model), Ok(()));
     check_model(instance.get_property("prop").unwrap(), &[]);
+}
+
+#[test]
+fn lang_type_to_value_type() {
+    use std::collections::BTreeMap;
+
+    assert_eq!(ValueType::from(LangType::Void), ValueType::Void);
+    assert_eq!(ValueType::from(LangType::Float32), ValueType::Number);
+    assert_eq!(ValueType::from(LangType::Int32), ValueType::Number);
+    assert_eq!(ValueType::from(LangType::Duration), ValueType::Number);
+    assert_eq!(ValueType::from(LangType::Angle), ValueType::Number);
+    assert_eq!(ValueType::from(LangType::PhysicalLength), ValueType::Number);
+    assert_eq!(ValueType::from(LangType::LogicalLength), ValueType::Number);
+    assert_eq!(ValueType::from(LangType::Percent), ValueType::Number);
+    assert_eq!(ValueType::from(LangType::UnitProduct(vec![])), ValueType::Number);
+    assert_eq!(ValueType::from(LangType::String), ValueType::String);
+    assert_eq!(ValueType::from(LangType::Color), ValueType::Brush);
+    assert_eq!(ValueType::from(LangType::Brush), ValueType::Brush);
+    assert_eq!(ValueType::from(LangType::Array(Box::new(LangType::Void))), ValueType::Model);
+    assert_eq!(ValueType::from(LangType::Bool), ValueType::Bool);
+    assert_eq!(
+        ValueType::from(LangType::Struct {
+            fields: BTreeMap::default(),
+            name: None,
+            node: None,
+            rust_attributes: None
+        }),
+        ValueType::Struct
+    );
+    assert_eq!(ValueType::from(LangType::Image), ValueType::Image);
 }
 
 #[cfg(feature = "ffi")]

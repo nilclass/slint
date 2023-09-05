@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 // cSpell: ignore nesw
 
@@ -22,12 +22,12 @@ When adding an item or a property, it needs to be kept in sync with different pl
 
 use crate::graphics::{Brush, Color, Point};
 use crate::input::{
-    FocusEvent, FocusEventResult, InputEventFilterResult, InputEventResult, KeyEvent,
-    KeyEventResult, KeyEventType, MouseEvent,
+    FocusEvent, FocusEventResult, InputEventFilterResult, InputEventResult, KeyEventResult,
+    KeyEventType, MouseEvent,
 };
 use crate::item_rendering::CachedRenderingData;
 pub use crate::item_tree::ItemRc;
-use crate::layout::{LayoutInfo, Orientation};
+use crate::layout::LayoutInfo;
 use crate::lengths::{
     LogicalLength, LogicalPoint, LogicalRect, LogicalSize, LogicalVector, PointLengths,
 };
@@ -42,6 +42,8 @@ use core::pin::Pin;
 use i_slint_core_macros::*;
 use vtable::*;
 
+mod component_container;
+pub use self::component_container::*;
 mod flickable;
 pub use flickable::*;
 mod text;
@@ -107,7 +109,7 @@ pub struct ItemVTable {
     /// This function is called by the run-time after the memory for the item
     /// has been allocated and initialized. It will be called before any user specified
     /// bindings are set.
-    pub init: extern "C" fn(core::pin::Pin<VRef<ItemVTable>>, window_adapter: &WindowAdapterRc),
+    pub init: extern "C" fn(core::pin::Pin<VRef<ItemVTable>>, my_item: &ItemRc),
 
     /// Returns the geometry of this item (relative to its parent item)
     pub geometry: extern "C" fn(core::pin::Pin<VRef<ItemVTable>>) -> LogicalRect,
@@ -183,7 +185,7 @@ pub struct Empty {
 }
 
 impl Item for Empty {
-    fn init(self: Pin<&Self>, _window_adapter: &Rc<dyn WindowAdapter>) {}
+    fn init(self: Pin<&Self>, _self_rc: &ItemRc) {}
 
     fn geometry(self: Pin<&Self>) -> LogicalRect {
         LogicalRect::new(
@@ -271,7 +273,7 @@ pub struct Rectangle {
 }
 
 impl Item for Rectangle {
-    fn init(self: Pin<&Self>, _window_adapter: &Rc<dyn WindowAdapter>) {}
+    fn init(self: Pin<&Self>, _self_rc: &ItemRc) {}
 
     fn geometry(self: Pin<&Self>) -> LogicalRect {
         LogicalRect::new(
@@ -363,7 +365,7 @@ pub struct BorderRectangle {
 }
 
 impl Item for BorderRectangle {
-    fn init(self: Pin<&Self>, _window_adapter: &Rc<dyn WindowAdapter>) {}
+    fn init(self: Pin<&Self>, _self_rc: &ItemRc) {}
 
     fn geometry(self: Pin<&Self>) -> LogicalRect {
         LogicalRect::new(
@@ -470,7 +472,7 @@ pub struct TouchArea {
 }
 
 impl Item for TouchArea {
-    fn init(self: Pin<&Self>, _window_adapter: &Rc<dyn WindowAdapter>) {}
+    fn init(self: Pin<&Self>, _self_rc: &ItemRc) {}
 
     fn geometry(self: Pin<&Self>) -> LogicalRect {
         LogicalRect::new(
@@ -503,7 +505,9 @@ impl Item for TouchArea {
         let hovering = !matches!(event, MouseEvent::Exit);
         Self::FIELD_OFFSETS.has_hover.apply_pin(self).set(hovering);
         if hovering {
-            window_adapter.set_mouse_cursor(self.mouse_cursor());
+            if let Some(x) = window_adapter.internal(crate::InternalToken) {
+                x.set_mouse_cursor(self.mouse_cursor());
+            }
         }
         InputEventFilterResult::ForwardAndInterceptGrab
     }
@@ -516,7 +520,9 @@ impl Item for TouchArea {
     ) -> InputEventResult {
         if matches!(event, MouseEvent::Exit) {
             Self::FIELD_OFFSETS.has_hover.apply_pin(self).set(false);
-            window_adapter.set_mouse_cursor(MouseCursor::Default);
+            if let Some(x) = window_adapter.internal(crate::InternalToken) {
+                x.set_mouse_cursor(MouseCursor::Default);
+            }
         }
         if !self.enabled() {
             return InputEventResult::EventIgnored;
@@ -528,6 +534,7 @@ impl Item for TouchArea {
                     LogicalSize::from_lengths(self.width(), self.height()),
                 )
                 .contains(position)
+                && self.pressed()
             {
                 Self::FIELD_OFFSETS.clicked.apply_pin(self).call(&());
             }
@@ -544,10 +551,11 @@ impl Item for TouchArea {
                     Self::FIELD_OFFSETS.pressed_y.apply_pin(self).set(position.y_length());
                     Self::FIELD_OFFSETS.pressed.apply_pin(self).set(true);
                 }
-                Self::FIELD_OFFSETS
-                    .pointer_event
-                    .apply_pin(self)
-                    .call(&(PointerEvent { button, kind: PointerEventKind::Down },));
+                Self::FIELD_OFFSETS.pointer_event.apply_pin(self).call(&(PointerEvent {
+                    button,
+                    kind: PointerEventKind::Down,
+                    modifiers: window_adapter.window().0.modifiers.get().into(),
+                },));
             }
             MouseEvent::Exit => {
                 Self::FIELD_OFFSETS.pressed.apply_pin(self).set(false);
@@ -555,6 +563,7 @@ impl Item for TouchArea {
                     Self::FIELD_OFFSETS.pointer_event.apply_pin(self).call(&(PointerEvent {
                         button: PointerEventButton::Other,
                         kind: PointerEventKind::Cancel,
+                        modifiers: window_adapter.window().0.modifiers.get().into(),
                     },));
                 }
             }
@@ -563,10 +572,11 @@ impl Item for TouchArea {
                 if button == PointerEventButton::Left {
                     Self::FIELD_OFFSETS.pressed.apply_pin(self).set(false);
                 }
-                Self::FIELD_OFFSETS
-                    .pointer_event
-                    .apply_pin(self)
-                    .call(&(PointerEvent { button, kind: PointerEventKind::Up },));
+                Self::FIELD_OFFSETS.pointer_event.apply_pin(self).call(&(PointerEvent {
+                    button,
+                    kind: PointerEventKind::Up,
+                    modifiers: window_adapter.window().0.modifiers.get().into(),
+                },));
             }
             MouseEvent::Moved { .. } => {
                 return if self.grabbed.get() {
@@ -644,7 +654,7 @@ pub struct FocusScope {
 }
 
 impl Item for FocusScope {
-    fn init(self: Pin<&Self>, _window_adapter: &Rc<dyn WindowAdapter>) {}
+    fn init(self: Pin<&Self>, _self_rc: &ItemRc) {}
 
     fn geometry(self: Pin<&Self>) -> LogicalRect {
         LogicalRect::new(
@@ -765,7 +775,7 @@ pub struct Clip {
 }
 
 impl Item for Clip {
-    fn init(self: Pin<&Self>, _window_adapter: &Rc<dyn WindowAdapter>) {}
+    fn init(self: Pin<&Self>, _self_rc: &ItemRc) {}
 
     fn geometry(self: Pin<&Self>) -> LogicalRect {
         LogicalRect::new(
@@ -862,7 +872,7 @@ pub struct Opacity {
 }
 
 impl Item for Opacity {
-    fn init(self: Pin<&Self>, _window_adapter: &Rc<dyn WindowAdapter>) {}
+    fn init(self: Pin<&Self>, _self_rc: &ItemRc) {}
 
     fn geometry(self: Pin<&Self>) -> LogicalRect {
         LogicalRect::new(
@@ -978,7 +988,7 @@ pub struct Layer {
 }
 
 impl Item for Layer {
-    fn init(self: Pin<&Self>, _window_adapter: &Rc<dyn WindowAdapter>) {}
+    fn init(self: Pin<&Self>, _self_rc: &ItemRc) {}
 
     fn geometry(self: Pin<&Self>) -> LogicalRect {
         LogicalRect::new(
@@ -1068,7 +1078,7 @@ pub struct Rotate {
 }
 
 impl Item for Rotate {
-    fn init(self: Pin<&Self>, _window_adapter: &Rc<dyn WindowAdapter>) {}
+    fn init(self: Pin<&Self>, _self_rc: &ItemRc) {}
 
     fn geometry(self: Pin<&Self>) -> LogicalRect {
         LogicalRect::new(
@@ -1193,7 +1203,7 @@ pub struct WindowItem {
 }
 
 impl Item for WindowItem {
-    fn init(self: Pin<&Self>, _window_adapter: &Rc<dyn WindowAdapter>) {}
+    fn init(self: Pin<&Self>, _self_rc: &ItemRc) {}
 
     fn geometry(self: Pin<&Self>) -> LogicalRect {
         LogicalRect::new(
@@ -1314,7 +1324,7 @@ pub struct BoxShadow {
 }
 
 impl Item for BoxShadow {
-    fn init(self: Pin<&Self>, _window_adapter: &Rc<dyn WindowAdapter>) {}
+    fn init(self: Pin<&Self>, _self_rc: &ItemRc) {}
 
     fn geometry(self: Pin<&Self>) -> LogicalRect {
         LogicalRect::new(
@@ -1388,6 +1398,10 @@ declare_item_vtable! {
 }
 
 declare_item_vtable! {
+    fn slint_get_ComponentContainerVTable() -> ComponentContainerVTable for ComponentContainer
+}
+
+declare_item_vtable! {
     fn slint_get_TextVTable() -> TextVTable for Text
 }
 
@@ -1412,7 +1426,7 @@ macro_rules! declare_enums {
     ($( $(#[$enum_doc:meta])* enum $Name:ident { $( $(#[$value_doc:meta])* $Value:ident,)* })*) => {
         $(
             #[derive(Copy, Clone, Debug, PartialEq, Eq, strum::EnumString, strum::Display, Hash)]
-            #[repr(C)]
+            #[repr(u32)]
             #[strum(serialize_all = "kebab-case")]
             $(#[$enum_doc])*
             pub enum $Name {
@@ -1431,10 +1445,45 @@ macro_rules! declare_enums {
 
 i_slint_common::for_each_enums!(declare_enums);
 
-/// Represents a Pointer event sent by the windowing system.
-#[derive(Debug, Clone, PartialEq, Default)]
-#[repr(C)]
-pub struct PointerEvent {
-    pub button: PointerEventButton,
-    pub kind: PointerEventKind,
+macro_rules! declare_builtin_structs {
+    ($(
+        $(#[$struct_attr:meta])*
+        struct $Name:ident {
+            @name = $inner_name:literal
+            export {
+                $( $(#[$pub_attr:meta])* $pub_field:ident : $pub_type:ty, )*
+            }
+            private {
+                $( $(#[$pri_attr:meta])* $pri_field:ident : $pri_type:ty, )*
+            }
+        }
+    )*) => {
+        $(
+            #[derive(Clone, Debug, Default, PartialEq)]
+            #[repr(C)]
+            $(#[$struct_attr])*
+            pub struct $Name {
+                $(
+                    $(#[$pub_attr])*
+                    pub $pub_field : $pub_type,
+                )*
+                $(
+                    $(#[$pri_attr])*
+                    pub $pri_field : $pri_type,
+                )*
+            }
+        )*
+    };
+}
+
+i_slint_common::for_each_builtin_structs!(declare_builtin_structs);
+
+#[cfg(feature = "ffi")]
+#[no_mangle]
+pub unsafe extern "C" fn slint_item_absolute_position(
+    self_component: &vtable::VRc<crate::component::ComponentVTable>,
+    self_index: usize,
+) -> LogicalPoint {
+    let self_rc = ItemRc::new(self_component.clone(), self_index);
+    self_rc.map_to_window(Default::default())
 }

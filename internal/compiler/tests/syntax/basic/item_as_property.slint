@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 struct Str := { foo: Rectangle }
 //                   ^error{'Rectangle' is not a valid type}
@@ -24,5 +24,6 @@ export Foo := Rectangle {
     Comp {
         r: xx;
 //      ^error{Unknown property}
+//         ^^error{Cannot take reference of an element}
     }
 }

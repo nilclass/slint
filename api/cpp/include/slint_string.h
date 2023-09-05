@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 #pragma once
 #include <string_view>
@@ -33,19 +33,15 @@ struct SharedString
     /// Creates a new SharedString from the null-terminated string pointer \a s. The underlying
     /// string data is copied. It is assumed that the string is UTF-8 encoded.
     SharedString(const char *s) : SharedString(std::string_view(s)) { }
-#if defined(__cpp_char8_t) || __cplusplus >= 202002L
     /// Creates a new SharedString from the null-terminated string pointer \a s. The underlying
     /// string data is copied.
     SharedString(const char8_t *s) : SharedString(reinterpret_cast<const char *>(s)) { }
-#endif
-#ifdef __cpp_lib_char8_t
     /// Creates a new SharedString from the string view \a s. The underlying string data is copied.
     SharedString(std::u8string_view s)
     {
         cbindgen_private::slint_shared_string_from_bytes(
                 this, reinterpret_cast<const char *>(s.data()), s.size());
     }
-#endif
     /// Creates a new SharedString from \a other.
     SharedString(const SharedString &other)
     {

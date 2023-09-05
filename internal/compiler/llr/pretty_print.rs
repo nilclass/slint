@@ -1,9 +1,11 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 use std::fmt::{Display, Result, Write};
 
 use itertools::Itertools;
+
+use crate::expression_tree::MinMaxOp;
 
 use super::{
     EvaluationContext, Expression, ParentCtx, PropertyReference, PublicComponent, SubComponent,
@@ -62,9 +64,10 @@ impl<'a> PrettyPrinter<'a> {
             self.indent()?;
             writeln!(
                 self.writer,
-                "{}: {};",
+                "{}: {};{}",
                 DisplayPropertyRef(p, &ctx),
-                DisplayExpression(&init.expression.borrow(), &ctx)
+                DisplayExpression(&init.expression.borrow(), &ctx),
+                if init.is_constant { " /*const*/" } else { "" }
             )?
         }
         for ssc in &sc.sub_components {
@@ -250,6 +253,10 @@ impl<'a, T> Display for DisplayExpression<'a, T> {
             Expression::ComputeDialogLayoutCells { .. } => {
                 write!(f, "ComputeDialogLayoutCells(TODO)",)
             }
+            Expression::MinMax { ty: _, op, lhs, rhs } => match op {
+                MinMaxOp::Min => write!(f, "min({}, {})", e(lhs), e(rhs)),
+                MinMaxOp::Max => write!(f, "max({}, {})", e(lhs), e(rhs)),
+            },
         }
     }
 }

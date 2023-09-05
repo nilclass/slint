@@ -1,7 +1,9 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 //! This module contains the [`SoftwareRenderer`] and related types.
+//!
+//! It is only enabled when the `renderer-software` Slint feature is enabled.
 
 #![warn(missing_docs)]
 
@@ -16,8 +18,8 @@ use crate::lengths::{
     LogicalLength, LogicalPoint, LogicalRect, LogicalSize, LogicalVector, PhysicalPx, PointLengths,
     RectLengths, ScaleFactor, SizeLengths,
 };
-use crate::renderer::Renderer;
-use crate::textlayout::{AbstractFont, TextParagraphLayout};
+use crate::renderer::{Renderer, RendererSealed};
+use crate::textlayout::{AbstractFont, FontMetrics, TextParagraphLayout};
 use crate::window::{WindowAdapter, WindowInner};
 use crate::{Brush, Color, Coord, ImageInner, StaticTextures};
 use alloc::rc::{Rc, Weak};
@@ -41,7 +43,7 @@ type PhysicalPoint = euclid::Point2D<i16, PhysicalPx>;
 type DirtyRegion = PhysicalRect;
 
 /// This enum describes which parts of the buffer passed to the [`SoftwareRenderer`] may be re-used to speed up painting.
-#[derive(PartialEq, Eq, Debug, Clone, Default)]
+#[derive(PartialEq, Eq, Debug, Clone, Default, Copy)]
 pub enum RepaintBufferType {
     #[default]
     /// The full window is always redrawn. No attempt at partial rendering will be made.
@@ -88,7 +90,7 @@ pub trait LineBufferProvider {
 /// Represents a rectangular region on the screen, used for partial rendering.
 ///
 /// The region may be composed of multiple sub-regions.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct PhysicalRegion(PhysicalRect);
 
 impl PhysicalRegion {
@@ -111,9 +113,10 @@ impl PhysicalRegion {
 ///  2. Using [`render_by_line()`](Self::render()) to render the window line by line. This
 ///     is only useful if the device does not have enough memory to render the whole window
 ///     in one single buffer
+#[derive(Default)]
 pub struct SoftwareRenderer {
     partial_cache: RefCell<crate::item_rendering::PartialRenderingCache>,
-    repaint_buffer_type: RepaintBufferType,
+    repaint_buffer_type: Cell<RepaintBufferType>,
     /// This is the area which we are going to redraw in the next frame, no matter if the items are dirty or not
     force_dirty: Cell<crate::item_rendering::DirtyRegion>,
     /// Force a redraw in the next frame, no matter what's dirty. Use only as a last resort.
@@ -121,28 +124,33 @@ pub struct SoftwareRenderer {
     /// This is the area which was dirty on the previous frame.
     /// Only used if repaint_buffer_type == RepaintBufferType::SwappedBuffers
     prev_frame_dirty: Cell<DirtyRegion>,
-    window: Weak<dyn crate::window::WindowAdapter>,
+    maybe_window_adapter: RefCell<Option<Weak<dyn crate::window::WindowAdapter>>>,
 }
 
 impl SoftwareRenderer {
-    /// Create a new Renderer for a given window.
+    /// Create a new Renderer
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    /// Create a new SoftwareRenderer.
     ///
     /// The `repaint_buffer_type` parameter specify what kind of buffer are passed to [`Self::render`]
+    pub fn new_with_repaint_buffer_type(repaint_buffer_type: RepaintBufferType) -> Self {
+        Self { repaint_buffer_type: repaint_buffer_type.into(), ..Default::default() }
+    }
+
+    /// Change the what kind of buffer is being passed to [`Self::render`]
     ///
-    /// The `window` parameter can be coming from [`Rc::new_cyclic()`](alloc::rc::Rc::new_cyclic())
-    /// since the `WindowAdapter` most likely own the Renderer
-    pub fn new(
-        repaint_buffer_type: RepaintBufferType,
-        window: Weak<dyn crate::window::WindowAdapter>,
-    ) -> Self {
-        Self {
-            window: window.clone(),
-            repaint_buffer_type,
-            partial_cache: Default::default(),
-            force_dirty: Default::default(),
-            force_screen_refresh: Default::default(),
-            prev_frame_dirty: Default::default(),
-        }
+    /// This may clear the internal caches
+    pub fn set_repaint_buffer_type(&self, repaint_buffer_type: RepaintBufferType) {
+        self.repaint_buffer_type.set(repaint_buffer_type);
+        self.partial_cache.borrow_mut().clear();
+    }
+
+    /// Returns the kind of buffer that must be passed to  [`Self::render`]
+    pub fn repaint_buffer_type(&self) -> RepaintBufferType {
+        self.repaint_buffer_type.get()
     }
 
     /// Internal function to apply a dirty region depending on the dirty_tracking_policy.
@@ -158,7 +166,7 @@ impl SoftwareRenderer {
             dirty_region = screen_region;
         }
 
-        match self.repaint_buffer_type {
+        match self.repaint_buffer_type() {
             RepaintBufferType::NewBuffer => {
                 PhysicalRect { origin: euclid::point2(0, 0), size: screen_size }
             }
@@ -180,7 +188,10 @@ impl SoftwareRenderer {
     ///
     /// returns the dirty region for this frame (not including the extra_draw_region)
     pub fn render(&self, buffer: &mut [impl TargetPixel], pixel_stride: usize) -> PhysicalRegion {
-        let window = self.window.upgrade().expect("render() called on a destroyed Window");
+        let Some(window) = self.maybe_window_adapter.borrow().as_ref().and_then(|w| w.upgrade())
+        else {
+            return Default::default();
+        };
         let window_inner = WindowInner::from_pub(window.window());
         let factor = ScaleFactor::new(window_inner.scale_factor());
         let (size, background) = if let Some(window_item) =
@@ -195,6 +206,14 @@ impl SoftwareRenderer {
         } else {
             (euclid::size2(pixel_stride as _, (buffer.len() / pixel_stride) as _), Brush::default())
         };
+        if size.is_empty() {
+            return Default::default();
+        }
+        assert!(
+            pixel_stride >= size.width as usize
+                && buffer.len() >= (size.height as usize * pixel_stride + size.width as usize) - pixel_stride,
+            "buffer of size {} with stride {pixel_stride} is too small to handle a window of size {size:?}", buffer.len()
+        );
         let buffer_renderer = SceneBuilder::new(
             size,
             factor,
@@ -207,34 +226,44 @@ impl SoftwareRenderer {
             buffer_renderer,
         );
 
-        window_inner.draw_contents(|components| {
-            for (component, origin) in components {
-                renderer.compute_dirty_regions(component, *origin);
-            }
+        window_inner
+            .draw_contents(|components| {
+                for (component, origin) in components {
+                    renderer.compute_dirty_regions(component, *origin);
+                }
 
-            let dirty_region = (renderer.dirty_region.to_rect().cast() * factor).round_out().cast();
+                let dirty_region = (renderer.dirty_region.to_rect().cast() * factor)
+                    .round_out()
+                    .intersection(&euclid::rect(0., 0., i16::MAX as f32, i16::MAX as f32))
+                    .unwrap_or_default()
+                    .cast();
 
-            let to_draw = self.apply_dirty_region(dirty_region, size);
+                let to_draw = self.apply_dirty_region(dirty_region, size);
 
-            renderer.combine_clip(
-                (to_draw.cast() / factor).cast(),
-                LogicalLength::zero(),
-                LogicalLength::zero(),
-            );
+                renderer.combine_clip(
+                    (to_draw.cast() / factor).cast(),
+                    LogicalLength::zero(),
+                    LogicalLength::zero(),
+                );
 
-            if !background.is_transparent() {
-                // FIXME: gradient
-                renderer
-                    .actual_renderer
-                    .processor
-                    .process_rectangle(to_draw, background.color().into());
-            }
-            for (component, origin) in components {
-                crate::item_rendering::render_component_items(component, &mut renderer, *origin);
-            }
+                if !background.is_transparent() {
+                    // FIXME: gradient
+                    renderer
+                        .actual_renderer
+                        .processor
+                        .process_rectangle(to_draw, background.color().into());
+                }
+                for (component, origin) in components {
+                    crate::item_rendering::render_component_items(
+                        component,
+                        &mut renderer,
+                        *origin,
+                    );
+                }
 
-            PhysicalRegion(to_draw)
-        })
+                PhysicalRegion(to_draw)
+            })
+            .unwrap_or_default()
     }
 
     /// Render the window, line by line, into the line buffer provided by the [`LineBufferProvider`].
@@ -272,7 +301,10 @@ impl SoftwareRenderer {
     /// # }
     /// ```
     pub fn render_by_line(&self, line_buffer: impl LineBufferProvider) -> PhysicalRegion {
-        let window = self.window.upgrade().expect("render() called on a destroyed Window");
+        let Some(window) = self.maybe_window_adapter.borrow().as_ref().and_then(|w| w.upgrade())
+        else {
+            return Default::default();
+        };
         let window_inner = WindowInner::from_pub(window.window());
         let component_rc = window_inner.component();
         let component = crate::component::ComponentRc::borrow_pin(&component_rc);
@@ -296,7 +328,7 @@ impl SoftwareRenderer {
 }
 
 #[doc(hidden)]
-impl Renderer for SoftwareRenderer {
+impl RendererSealed for SoftwareRenderer {
     fn text_size(
         &self,
         font_request: crate::graphics::FontRequest,
@@ -309,17 +341,127 @@ impl Renderer for SoftwareRenderer {
 
     fn text_input_byte_offset_for_position(
         &self,
-        _text_input: Pin<&crate::items::TextInput>,
-        _pos: LogicalPoint,
+        text_input: Pin<&crate::items::TextInput>,
+        pos: LogicalPoint,
+        font_request: crate::graphics::FontRequest,
+        scale_factor: ScaleFactor,
     ) -> usize {
-        0
+        let visual_representation = text_input.visual_representation(None);
+
+        let font = fonts::match_font(&font_request, scale_factor);
+
+        let width = (text_input.width().cast() * scale_factor).cast();
+        let height = (text_input.height().cast() * scale_factor).cast();
+
+        let pos = (pos.cast() * scale_factor)
+            .clamp(euclid::point2(0., 0.), euclid::point2(i16::MAX, i16::MAX).cast())
+            .cast();
+
+        match font {
+            fonts::Font::PixelFont(pf) => {
+                let layout = fonts::text_layout_for_font(&pf, &font_request, scale_factor);
+
+                let paragraph = TextParagraphLayout {
+                    string: &visual_representation.text,
+                    layout,
+                    max_width: width,
+                    max_height: height,
+                    horizontal_alignment: text_input.horizontal_alignment(),
+                    vertical_alignment: text_input.vertical_alignment(),
+                    wrap: text_input.wrap(),
+                    overflow: TextOverflow::Clip,
+                    single_line: false,
+                };
+
+                visual_representation.map_byte_offset_from_byte_offset_in_visual_text(
+                    paragraph.byte_offset_for_position((pos.x_length(), pos.y_length())),
+                )
+            }
+            #[cfg(all(feature = "software-renderer-systemfonts", not(target_arch = "wasm32")))]
+            fonts::Font::VectorFont(vf) => {
+                let layout = fonts::text_layout_for_font(&vf, &font_request, scale_factor);
+
+                let paragraph = TextParagraphLayout {
+                    string: &visual_representation.text,
+                    layout,
+                    max_width: width,
+                    max_height: height,
+                    horizontal_alignment: text_input.horizontal_alignment(),
+                    vertical_alignment: text_input.vertical_alignment(),
+                    wrap: text_input.wrap(),
+                    overflow: TextOverflow::Clip,
+                    single_line: false,
+                };
+
+                visual_representation.map_byte_offset_from_byte_offset_in_visual_text(
+                    paragraph.byte_offset_for_position((pos.x_length(), pos.y_length())),
+                )
+            }
+        }
     }
+
     fn text_input_cursor_rect_for_byte_offset(
         &self,
-        _text_input: Pin<&crate::items::TextInput>,
-        _byte_offset: usize,
+        text_input: Pin<&crate::items::TextInput>,
+        byte_offset: usize,
+        font_request: crate::graphics::FontRequest,
+        scale_factor: ScaleFactor,
     ) -> LogicalRect {
-        Default::default()
+        let visual_representation = text_input.visual_representation(None);
+
+        let font = fonts::match_font(&font_request, scale_factor);
+
+        let width = (text_input.width().cast() * scale_factor).cast();
+        let height = (text_input.height().cast() * scale_factor).cast();
+
+        let (cursor_position, cursor_height) = match font {
+            fonts::Font::PixelFont(pf) => {
+                let layout = fonts::text_layout_for_font(&pf, &font_request, scale_factor);
+
+                let paragraph = TextParagraphLayout {
+                    string: &visual_representation.text,
+                    layout,
+                    max_width: width,
+                    max_height: height,
+                    horizontal_alignment: text_input.horizontal_alignment(),
+                    vertical_alignment: text_input.vertical_alignment(),
+                    wrap: text_input.wrap(),
+                    overflow: TextOverflow::Clip,
+                    single_line: false,
+                };
+
+                (paragraph.cursor_pos_for_byte_offset(byte_offset), pf.height())
+            }
+            #[cfg(all(feature = "software-renderer-systemfonts", not(target_arch = "wasm32")))]
+            fonts::Font::VectorFont(vf) => {
+                let layout = fonts::text_layout_for_font(&vf, &font_request, scale_factor);
+
+                let paragraph = TextParagraphLayout {
+                    string: &visual_representation.text,
+                    layout,
+                    max_width: width,
+                    max_height: height,
+                    horizontal_alignment: text_input.horizontal_alignment(),
+                    vertical_alignment: text_input.vertical_alignment(),
+                    wrap: text_input.wrap(),
+                    overflow: TextOverflow::Clip,
+                    single_line: false,
+                };
+
+                (paragraph.cursor_pos_for_byte_offset(byte_offset), vf.height())
+            }
+        };
+
+        (PhysicalRect::new(
+            PhysicalPoint::from_lengths(cursor_position.0, cursor_position.1),
+            PhysicalSize::from_lengths(
+                (text_input.text_cursor_width().cast() * scale_factor).cast(),
+                cursor_height,
+            ),
+        )
+        .cast()
+            / scale_factor)
+            .cast()
     }
 
     fn free_graphics_resources(
@@ -344,7 +486,7 @@ impl Renderer for SoftwareRenderer {
         fonts::register_bitmap_font(font_data);
     }
 
-    #[cfg(feature = "software-renderer-systemfonts")]
+    #[cfg(all(feature = "software-renderer-systemfonts", not(target_arch = "wasm32")))]
     fn register_font_from_memory(
         &self,
         data: &'static [u8],
@@ -352,7 +494,7 @@ impl Renderer for SoftwareRenderer {
         self::fonts::systemfonts::register_font_from_memory(data)
     }
 
-    #[cfg(feature = "software-renderer-systemfonts")]
+    #[cfg(all(feature = "software-renderer-systemfonts", not(target_arch = "wasm32")))]
     fn register_font_from_path(
         &self,
         path: &std::path::Path,
@@ -362,6 +504,11 @@ impl Renderer for SoftwareRenderer {
 
     fn default_font_size(&self) -> LogicalLength {
         self::fonts::DEFAULT_FONT_SIZE
+    }
+
+    fn set_window_adapter(&self, window_adapter: &Rc<dyn WindowAdapter>) {
+        *self.maybe_window_adapter.borrow_mut() = Some(Rc::downgrade(window_adapter));
+        self.partial_cache.borrow_mut().clear();
     }
 }
 
@@ -1154,75 +1301,106 @@ impl<'a, T: ProcessScene> SceneBuilder<'a, T> {
         };
     }
 
-    fn draw_text_paragraph<'b, Font: AbstractFont>(
+    fn draw_text_paragraph<Font: AbstractFont>(
         &mut self,
-        paragraph: TextParagraphLayout<'b, Font>,
+        paragraph: &TextParagraphLayout<'_, Font>,
         physical_clip: euclid::Rect<f32, PhysicalPx>,
         offset: euclid::Vector2D<f32, PhysicalPx>,
         color: Color,
+        selection: Option<SelectionInfo>,
     ) where
         Font: crate::textlayout::TextShaper<Length = PhysicalLength>,
         Font: GlyphRenderer,
     {
-        paragraph.layout_lines(|glyphs, line_x, line_y| {
-            let baseline_y = line_y + paragraph.layout.font.ascent();
-            while let Some(positioned_glyph) = glyphs.next() {
-                let glyph = paragraph.layout.font.render_glyph(positioned_glyph.glyph_id);
-
-                let src_rect = PhysicalRect::new(
-                    PhysicalPoint::from_lengths(
-                        line_x + positioned_glyph.x + glyph.x,
-                        baseline_y - glyph.y - glyph.height,
-                    ),
-                    glyph.size(),
-                )
-                .cast();
-
-                if let Some(clipped_src) = src_rect.intersection(&physical_clip) {
-                    let geometry = clipped_src.translate(offset).round();
-                    let origin = (geometry.origin - offset.round()).cast::<usize>();
-                    let actual_x = origin.x - src_rect.origin.x as usize;
-                    let actual_y = origin.y - src_rect.origin.y as usize;
-                    let stride = glyph.width.get() as u16;
-                    let geometry = geometry.cast();
-
-                    match &glyph.alpha_map {
-                        fonts::GlyphAlphaMap::Static(data) => {
-                            self.processor.process_texture(
-                                geometry,
-                                SceneTexture {
-                                    data: &data[actual_x + actual_y * stride as usize..],
-                                    stride,
-                                    source_size: geometry.size,
-                                    format: PixelFormat::AlphaMap,
-                                    color,
-                                    // color already is mixed with global alpha
-                                    alpha: color.alpha(),
-                                },
+        paragraph
+            .layout_lines::<()>(
+                |glyphs, line_x, line_y, _, sel| {
+                    let baseline_y = line_y + paragraph.layout.font.ascent();
+                    if let (Some(sel), Some(selection)) = (sel, &selection) {
+                        let geometry = euclid::rect(
+                            sel.start.get(),
+                            line_y.get(),
+                            (sel.end - sel.start).get(),
+                            paragraph.layout.font.height().get(),
+                        );
+                        if let Some(clipped_src) = geometry.intersection(&physical_clip.cast()) {
+                            self.processor.process_rectangle(
+                                clipped_src.translate(offset.cast()),
+                                selection.selection_background.into(),
                             );
                         }
-                        fonts::GlyphAlphaMap::Shared(data) => {
-                            self.processor.process_shared_image_buffer(
-                                geometry,
-                                SharedBufferCommand {
-                                    buffer: SharedBufferData::AlphaMap {
-                                        data: data.clone(),
-                                        width: stride,
-                                    },
-                                    source_rect: PhysicalRect::new(
-                                        PhysicalPoint::new(actual_x as _, actual_y as _),
-                                        geometry.size,
-                                    ),
-                                    colorize: color,
-                                    // color already is mixed with global alpha
-                                    alpha: color.alpha(),
-                                },
-                            );
+                    }
+                    for positioned_glyph in glyphs {
+                        let glyph = paragraph.layout.font.render_glyph(positioned_glyph.glyph_id);
+
+                        let src_rect = PhysicalRect::new(
+                            PhysicalPoint::from_lengths(
+                                line_x + positioned_glyph.x + glyph.x,
+                                baseline_y - glyph.y - glyph.height,
+                            ),
+                            glyph.size(),
+                        )
+                        .cast();
+
+                        let color = match &selection {
+                            Some(s) if s.selection.contains(&positioned_glyph.text_byte_offset) => {
+                                s.selection_color
+                            }
+                            _ => color,
+                        };
+
+                        if let Some(clipped_src) = src_rect.intersection(&physical_clip) {
+                            let geometry = clipped_src.translate(offset).round();
+                            if geometry.is_empty() {
+                                continue;
+                            }
+                            let origin = (geometry.origin - offset.round()).round().cast::<usize>();
+                            let actual_x = origin.x - src_rect.origin.x as usize;
+                            let actual_y = origin.y - src_rect.origin.y as usize;
+                            let stride = glyph.width.get() as u16;
+                            let geometry = geometry.cast();
+
+                            match &glyph.alpha_map {
+                                fonts::GlyphAlphaMap::Static(data) => {
+                                    self.processor.process_texture(
+                                        geometry,
+                                        SceneTexture {
+                                            data: &data[actual_x + actual_y * stride as usize..],
+                                            stride,
+                                            source_size: geometry.size,
+                                            format: PixelFormat::AlphaMap,
+                                            color,
+                                            // color already is mixed with global alpha
+                                            alpha: color.alpha(),
+                                        },
+                                    );
+                                }
+                                fonts::GlyphAlphaMap::Shared(data) => {
+                                    self.processor.process_shared_image_buffer(
+                                        geometry,
+                                        SharedBufferCommand {
+                                            buffer: SharedBufferData::AlphaMap {
+                                                data: data.clone(),
+                                                width: stride,
+                                            },
+                                            source_rect: PhysicalRect::new(
+                                                PhysicalPoint::new(actual_x as _, actual_y as _),
+                                                geometry.size,
+                                            ),
+                                            colorize: color,
+                                            // color already is mixed with global alpha
+                                            alpha: color.alpha(),
+                                        },
+                                    );
+                                }
+                            };
                         }
-                    };
-                }
-            }
-        });
+                    }
+                    core::ops::ControlFlow::Continue(())
+                },
+                selection.as_ref().map(|s| s.selection.clone()),
+            )
+            .ok();
     }
 
     /// Returns the color, mixed with the current_state's alpha
@@ -1240,6 +1418,12 @@ impl<'a, T: ProcessScene> SceneBuilder<'a, T> {
     }
 }
 
+struct SelectionInfo {
+    selection_color: Color,
+    selection_background: Color,
+    selection: core::ops::Range<usize>,
+}
+
 #[derive(Clone, Copy)]
 struct RenderState {
     alpha: f32,
@@ -1248,6 +1432,7 @@ struct RenderState {
 }
 
 impl<'a, T: ProcessScene> crate::item_rendering::ItemRenderer for SceneBuilder<'a, T> {
+    #[allow(clippy::unnecessary_cast)] // Coord!
     fn draw_rectangle(
         &mut self,
         rect: Pin<&crate::items::Rectangle>,
@@ -1374,6 +1559,7 @@ impl<'a, T: ProcessScene> crate::item_rendering::ItemRenderer for SceneBuilder<'
         }
     }
 
+    #[allow(clippy::unnecessary_cast)] // Coord
     fn draw_border_rectangle(
         &mut self,
         rect: Pin<&crate::items::BorderRectangle>,
@@ -1408,9 +1594,9 @@ impl<'a, T: ProcessScene> crate::item_rendering::ItemRenderer for SceneBuilder<'
                 let b = border_color;
                 let b_alpha_16 = b.alpha as u16;
                 border_color = PremultipliedRgbaColor {
-                    red: ((color.red as u16 * (255 - b_alpha_16)) / 255) as u8 + b.red as u8,
-                    green: ((color.green as u16 * (255 - b_alpha_16)) / 255) as u8 + b.green as u8,
-                    blue: ((color.blue as u16 * (255 - b_alpha_16)) / 255) as u8 + b.blue as u8,
+                    red: ((color.red as u16 * (255 - b_alpha_16)) / 255) as u8 + b.red,
+                    green: ((color.green as u16 * (255 - b_alpha_16)) / 255) as u8 + b.green,
+                    blue: ((color.blue as u16 * (255 - b_alpha_16)) / 255) as u8 + b.blue,
                     alpha: (color.alpha as u16 + b_alpha_16
                         - (color.alpha as u16 * b_alpha_16) / 255) as u8,
                 }
@@ -1581,9 +1767,9 @@ impl<'a, T: ProcessScene> crate::item_rendering::ItemRenderer for SceneBuilder<'
                     single_line: false,
                 };
 
-                self.draw_text_paragraph(paragraph, physical_clip, offset, color);
+                self.draw_text_paragraph(&paragraph, physical_clip, offset, color, None);
             }
-            #[cfg(feature = "software-renderer-systemfonts")]
+            #[cfg(all(feature = "software-renderer-systemfonts", not(target_arch = "wasm32")))]
             fonts::Font::VectorFont(vf) => {
                 let layout = fonts::text_layout_for_font(&vf, &font_request, self.scale_factor);
 
@@ -1599,7 +1785,7 @@ impl<'a, T: ProcessScene> crate::item_rendering::ItemRenderer for SceneBuilder<'
                     single_line: false,
                 };
 
-                self.draw_text_paragraph(paragraph, physical_clip, offset, color);
+                self.draw_text_paragraph(&paragraph, physical_clip, offset, color, None);
             }
         }
     }
@@ -1610,7 +1796,6 @@ impl<'a, T: ProcessScene> crate::item_rendering::ItemRenderer for SceneBuilder<'
         _: &ItemRc,
         size: LogicalSize,
     ) {
-        let string = text_input.text();
         let geom = LogicalRect::from(size);
         if !self.should_draw(&geom) {
             return;
@@ -1634,10 +1819,19 @@ impl<'a, T: ProcessScene> crate::item_rendering::ItemRenderer for SceneBuilder<'
 
         let font = fonts::match_font(&font_request, self.scale_factor);
 
-        match font {
+        let text_visual_representation = text_input.visual_representation(None);
+
+        let selection =
+            (!text_visual_representation.selection_range.is_empty()).then_some(SelectionInfo {
+                selection_background: self.alpha_color(text_input.selection_background_color()),
+                selection_color: self.alpha_color(text_input.selection_foreground_color()),
+                selection: text_visual_representation.selection_range.clone(),
+            });
+
+        let cursor_pos_and_height = match font {
             fonts::Font::PixelFont(pf) => {
                 let paragraph = TextParagraphLayout {
-                    string: &string,
+                    string: &text_visual_representation.text,
                     layout: fonts::text_layout_for_font(&pf, &font_request, self.scale_factor),
                     max_width: max_size.width_length(),
                     max_height: max_size.height_length(),
@@ -1648,12 +1842,16 @@ impl<'a, T: ProcessScene> crate::item_rendering::ItemRenderer for SceneBuilder<'
                     single_line: text_input.single_line(),
                 };
 
-                self.draw_text_paragraph(paragraph, physical_clip, offset, color);
+                self.draw_text_paragraph(&paragraph, physical_clip, offset, color, selection);
+
+                text_visual_representation.cursor_position.map(|cursor_offset| {
+                    (paragraph.cursor_pos_for_byte_offset(cursor_offset), pf.height())
+                })
             }
-            #[cfg(feature = "software-renderer-systemfonts")]
+            #[cfg(all(feature = "software-renderer-systemfonts", not(target_arch = "wasm32")))]
             fonts::Font::VectorFont(vf) => {
                 let paragraph = TextParagraphLayout {
-                    string: &string,
+                    string: &text_visual_representation.text,
                     layout: fonts::text_layout_for_font(&vf, &font_request, self.scale_factor),
                     max_width: max_size.width_length(),
                     max_height: max_size.height_length(),
@@ -1664,7 +1862,26 @@ impl<'a, T: ProcessScene> crate::item_rendering::ItemRenderer for SceneBuilder<'
                     single_line: text_input.single_line(),
                 };
 
-                self.draw_text_paragraph(paragraph, physical_clip, offset, color);
+                self.draw_text_paragraph(&paragraph, physical_clip, offset, color, selection);
+
+                text_visual_representation.cursor_position.map(|cursor_offset| {
+                    (paragraph.cursor_pos_for_byte_offset(cursor_offset), vf.height())
+                })
+            }
+        };
+
+        if let Some(((cursor_x, cursor_y), cursor_height)) = cursor_pos_and_height {
+            let cursor_rect = PhysicalRect::new(
+                PhysicalPoint::from_lengths(cursor_x, cursor_y),
+                PhysicalSize::from_lengths(
+                    (text_input.text_cursor_width().cast() * self.scale_factor).cast(),
+                    cursor_height,
+                ),
+            );
+
+            if let Some(clipped_src) = cursor_rect.intersection(&physical_clip.cast()) {
+                self.processor
+                    .process_rectangle(clipped_src.translate(offset.cast()), color.into());
             }
         }
     }
@@ -1773,6 +1990,10 @@ impl<'a, T: ProcessScene> crate::item_rendering::ItemRenderer for SceneBuilder<'
         todo!()
     }
 
+    fn draw_image_direct(&mut self, _image: crate::graphics::Image) {
+        todo!()
+    }
+
     fn window(&self) -> &crate::window::WindowInner {
         self.window
     }
@@ -1788,6 +2009,7 @@ pub struct MinimalSoftwareWindow {
     window: Window,
     renderer: SoftwareRenderer,
     needs_redraw: Cell<bool>,
+    size: Cell<crate::api::PhysicalSize>,
 }
 
 impl MinimalSoftwareWindow {
@@ -1797,8 +2019,9 @@ impl MinimalSoftwareWindow {
     pub fn new(repaint_buffer_type: RepaintBufferType) -> Rc<Self> {
         Rc::new_cyclic(|w: &Weak<Self>| Self {
             window: Window::new(w.clone()),
-            renderer: SoftwareRenderer::new(repaint_buffer_type, w.clone()),
+            renderer: SoftwareRenderer::new_with_repaint_buffer_type(repaint_buffer_type),
             needs_redraw: Default::default(),
+            size: Default::default(),
         })
     }
     /// If the window needs to be redrawn, the callback will be called with the
@@ -1816,27 +2039,36 @@ impl MinimalSoftwareWindow {
             false
         }
     }
-}
 
-impl crate::window::WindowAdapterSealed for MinimalSoftwareWindow {
-    fn request_redraw(&self) {
-        self.needs_redraw.set(true);
-    }
-    fn renderer(&self) -> &dyn Renderer {
-        &self.renderer
-    }
-
-    fn unregister_component<'a>(
-        &self,
-        _component: crate::component::ComponentRef,
-        _items: &mut dyn Iterator<Item = Pin<crate::items::ItemRef<'a>>>,
-    ) {
+    #[doc(hidden)]
+    /// Forward to the window through Deref
+    /// (Before 1.1, WindowAdapter didn't have set_size, so the one from Deref was used.
+    /// But in Slint 1.1, if one had imported the WindowAdapter trait, the other one would be found)
+    pub fn set_size(&self, size: impl Into<crate::api::WindowSize>) {
+        self.window.set_size(size);
     }
 }
 
 impl WindowAdapter for MinimalSoftwareWindow {
     fn window(&self) -> &Window {
         &self.window
+    }
+
+    fn renderer(&self) -> &dyn Renderer {
+        &self.renderer
+    }
+
+    fn size(&self) -> crate::api::PhysicalSize {
+        self.size.get()
+    }
+    fn set_size(&self, size: crate::api::WindowSize) {
+        self.size.set(size.to_physical(1.));
+        self.window
+            .dispatch_event(crate::platform::WindowEvent::Resized { size: size.to_logical(1.) })
+    }
+
+    fn request_redraw(&self) {
+        self.needs_redraw.set(true);
     }
 }
 

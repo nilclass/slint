@@ -1,36 +1,78 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 #![cfg(not(target_arch = "wasm32"))]
 
-mod completion;
-mod goto;
-mod lsp_ext;
+mod common;
+mod language;
+pub mod lsp_ext;
 #[cfg(feature = "preview")]
 mod preview;
-mod properties;
-mod semantic_tokens;
-mod server_loop;
-#[cfg(test)]
-mod test;
-mod util;
+pub mod util;
+
+use common::{PreviewApi, Result};
+use language::*;
 
 use i_slint_compiler::CompilerConfiguration;
 use lsp_types::notification::{
     DidChangeConfiguration, DidChangeTextDocument, DidOpenTextDocument, Notification,
 };
 use lsp_types::{DidChangeTextDocumentParams, DidOpenTextDocumentParams, InitializeParams};
-use server_loop::*;
 
 use clap::Parser;
 use lsp_server::{Connection, ErrorCode, Message, RequestId, Response};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::future::Future;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::{atomic, Arc, Mutex};
 use std::task::{Poll, Waker};
+
+struct Previewer {
+    #[allow(unused)]
+    server_notifier: ServerNotifier,
+}
+
+impl PreviewApi for Previewer {
+    fn set_design_mode(&self, _enable: bool) {
+        #[cfg(feature = "preview")]
+        preview::set_design_mode(self.server_notifier.clone(), _enable);
+    }
+
+    fn design_mode(&self) -> bool {
+        #[cfg(not(feature = "preview"))]
+        return false;
+        #[cfg(feature = "preview")]
+        return preview::design_mode();
+    }
+
+    fn set_contents(&self, _path: &std::path::Path, _contents: &str) {
+        #[cfg(feature = "preview")]
+        preview::set_contents(_path, _contents.to_string());
+    }
+
+    fn load_preview(
+        &self,
+        _component: common::PreviewComponent,
+        _behavior: common::PostLoadBehavior,
+    ) {
+        #[cfg(feature = "preview")]
+        preview::load_preview(self.server_notifier.clone(), _component, _behavior);
+    }
+
+    fn config_changed(&self, _style: &str, _include_paths: &[PathBuf]) {
+        #[cfg(feature = "preview")]
+        preview::config_changed(_style, _include_paths);
+    }
+
+    fn highlight(&self, _path: Option<std::path::PathBuf>, _offset: u32) -> Result<()> {
+        #[cfg(feature = "preview")]
+        preview::highlight(_path, _offset);
+        Ok(())
+    }
+}
 
 #[derive(Clone, clap::Parser)]
 #[command(author, version, about, long_about = None)]
@@ -65,11 +107,7 @@ type OutgoingRequestQueue = Arc<Mutex<HashMap<RequestId, OutgoingRequest>>>;
 #[derive(Clone)]
 pub struct ServerNotifier(crossbeam_channel::Sender<Message>, OutgoingRequestQueue);
 impl ServerNotifier {
-    pub fn send_notification(
-        &self,
-        method: String,
-        params: impl serde::Serialize,
-    ) -> Result<(), Error> {
+    pub fn send_notification(&self, method: String, params: impl serde::Serialize) -> Result<()> {
         self.0.send(Message::Notification(lsp_server::Notification::new(method, params)))?;
         Ok(())
     }
@@ -77,7 +115,7 @@ impl ServerNotifier {
     pub fn send_request<T: lsp_types::request::Request>(
         &self,
         request: T::Params,
-    ) -> Result<impl Future<Output = Result<T::Result, Error>>, Error> {
+    ) -> Result<impl Future<Output = Result<T::Result>>> {
         static REQ_ID: atomic::AtomicI32 = atomic::AtomicI32::new(0);
         let id = RequestId::from(REQ_ID.fetch_add(1, atomic::Ordering::Relaxed));
         let msg =
@@ -104,32 +142,10 @@ impl ServerNotifier {
             }
         }))
     }
-
-    pub async fn progress_reporter(
-        &self,
-        token: lsp_types::ProgressToken,
-        title: String,
-        message: Option<String>,
-        percentage: Option<u32>,
-        cancellable: Option<bool>,
-    ) -> Result<server_loop::ProgressReporter, Error> {
-        server_loop::ProgressReporter::new(
-            self.clone(),
-            token,
-            title,
-            message,
-            percentage,
-            cancellable,
-        )
-    }
 }
 
 impl RequestHandler {
-    async fn handle_request(
-        &self,
-        request: lsp_server::Request,
-        ctx: &Rc<Context>,
-    ) -> Result<(), Error> {
+    async fn handle_request(&self, request: lsp_server::Request, ctx: &Rc<Context>) -> Result<()> {
         if let Some(x) = self.0.get(&request.method.as_str()) {
             match x(request.params, ctx.clone()).await {
                 Ok(r) => ctx
@@ -191,21 +207,21 @@ fn main() {
     }
 }
 
-pub fn run_lsp_server() -> Result<(), Error> {
+pub fn run_lsp_server() -> Result<()> {
     let (connection, io_threads) = Connection::stdio();
     let (id, params) = connection.initialize_start()?;
 
     let init_param: InitializeParams = serde_json::from_value(params).unwrap();
     let initialize_result =
-        serde_json::to_value(server_loop::server_initialize_result(&init_param.capabilities))?;
+        serde_json::to_value(language::server_initialize_result(&init_param.capabilities))?;
     connection.initialize_finish(id, initialize_result)?;
 
-    main_loop(&connection, init_param)?;
+    main_loop(connection, init_param)?;
     io_threads.join()?;
     Ok(())
 }
 
-fn main_loop(connection: &Connection, init_param: InitializeParams) -> Result<(), Error> {
+fn main_loop(connection: Connection, init_param: InitializeParams) -> Result<()> {
     let mut compiler_config =
         CompilerConfiguration::new(i_slint_compiler::generator::OutputFormat::Interpreter);
 
@@ -221,24 +237,12 @@ fn main_loop(connection: &Connection, init_param: InitializeParams) -> Result<()
     let server_notifier = ServerNotifier(connection.sender.clone(), request_queue.clone());
     let ctx = Rc::new(Context {
         document_cache: RefCell::new(DocumentCache::new(compiler_config)),
-        server_notifier,
+        server_notifier: server_notifier.clone(),
         init_param,
-        #[cfg(feature = "preview-api")]
-        preview: server_loop::PreviewApi {
-            highlight: Box::new(
-                |_ctx: &Rc<Context>,
-                 path: Option<std::path::PathBuf>,
-                 offset: u32|
-                 -> Result<(), Box<dyn std::error::Error>> {
-                    #[cfg(feature = "preview")]
-                    preview::highlight(path, offset);
-                    Ok(())
-                },
-            ),
-        },
+        preview: Box::new(Previewer { server_notifier }),
     });
 
-    let mut futures = Vec::<Pin<Box<dyn Future<Output = Result<(), Error>>>>>::new();
+    let mut futures = Vec::<Pin<Box<dyn Future<Output = Result<()>>>>>::new();
     let mut first_future = Box::pin(load_configuration(&ctx));
 
     // We are waiting in this loop for two kind of futures:
@@ -259,7 +263,8 @@ fn main_loop(connection: &Connection, init_param: InitializeParams) -> Result<()
     for msg in &connection.receiver {
         match msg {
             Message::Request(req) => {
-                if connection.handle_shutdown(&req)? {
+                // ignore errors when shutdown
+                if connection.handle_shutdown(&req).unwrap_or(false) {
                     return Ok(());
                 }
                 futures.push(Box::pin(rh.handle_request(req, &ctx)));
@@ -300,15 +305,12 @@ fn main_loop(connection: &Connection, init_param: InitializeParams) -> Result<()
     Ok(())
 }
 
-async fn handle_notification(
-    req: lsp_server::Notification,
-    ctx: &Rc<Context>,
-) -> Result<(), Error> {
+async fn handle_notification(req: lsp_server::Notification, ctx: &Rc<Context>) -> Result<()> {
     match &*req.method {
         DidOpenTextDocument::METHOD => {
             let params: DidOpenTextDocumentParams = serde_json::from_value(req.params)?;
             reload_document(
-                &ctx.server_notifier,
+                &ctx,
                 params.text_document.text,
                 params.text_document.uri,
                 params.text_document.version,
@@ -319,7 +321,7 @@ async fn handle_notification(
         DidChangeTextDocument::METHOD => {
             let mut params: DidChangeTextDocumentParams = serde_json::from_value(req.params)?;
             reload_document(
-                &ctx.server_notifier,
+                &ctx,
                 params.content_changes.pop().unwrap().text,
                 params.text_document.uri,
                 params.text_document.version,

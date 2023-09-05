@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 use i_slint_core::input::FocusEventResult;
 
@@ -17,11 +17,18 @@ pub struct NativeComboBox {
     pub pressed: Property<bool>,
     pub is_open: Property<bool>,
     pub current_value: Property<SharedString>,
+    widget_ptr: std::cell::Cell<SlintTypeErasedWidgetPtr>,
+    animation_tracker: Property<i32>,
     pub cached_rendering_data: CachedRenderingData,
 }
 
 impl Item for NativeComboBox {
-    fn init(self: Pin<&Self>, _window_adapter: &Rc<dyn WindowAdapter>) {}
+    fn init(self: Pin<&Self>, _self_rc: &ItemRc) {
+        let animation_tracker_property_ptr = Self::FIELD_OFFSETS.animation_tracker.apply_pin(self);
+        self.widget_ptr.set(cpp! { unsafe [animation_tracker_property_ptr as "void*"] -> SlintTypeErasedWidgetPtr as "std::unique_ptr<SlintTypeErasedWidget>"  {
+            return make_unique_animated_widget<QComboBox>(animation_tracker_property_ptr);
+        }})
+    }
 
     fn geometry(self: Pin<&Self>) -> LogicalRect {
         LogicalRect::new(
@@ -35,13 +42,14 @@ impl Item for NativeComboBox {
         orientation: Orientation,
         _window_adapter: &Rc<dyn WindowAdapter>,
     ) -> LayoutInfo {
-        let size = cpp!(unsafe [] -> qttypes::QSize as "QSize" {
+        let widget: NonNull<()> = SlintTypeErasedWidgetPtr::qwidget_ptr(&self.widget_ptr);
+        let size = cpp!(unsafe [widget as "QWidget*"] -> qttypes::QSize as "QSize" {
             ensure_initialized();
             QStyleOptionComboBox option;
             // FIXME
-            option.rect = option.fontMetrics.boundingRect("*************");
+            option.rect = option.fontMetrics.boundingRect("******************");
             option.subControls = QStyle::SC_All;
-            return qApp->style()->sizeFromContents(QStyle::CT_ComboBox, &option, option.rect.size(), nullptr);
+            return qApp->style()->sizeFromContents(QStyle::CT_ComboBox, &option, option.rect.size(), widget);
         });
         LayoutInfo {
             min: match orientation {
@@ -107,6 +115,7 @@ impl Item for NativeComboBox {
         ] {
             ensure_initialized();
             QStyleOptionComboBox option;
+            option.styleObject = widget;
             option.state |= QStyle::State(initial_state);
             option.currentText = std::move(text);
             option.rect = QRect(QPoint(), size / dpr);
@@ -147,11 +156,18 @@ pub struct NativeComboBoxPopup {
     pub y: Property<LogicalLength>,
     pub width: Property<LogicalLength>,
     pub height: Property<LogicalLength>,
+    widget_ptr: std::cell::Cell<SlintTypeErasedWidgetPtr>,
+    animation_tracker: Property<i32>,
     pub cached_rendering_data: CachedRenderingData,
 }
 
 impl Item for NativeComboBoxPopup {
-    fn init(self: Pin<&Self>, _window_adapter: &Rc<dyn WindowAdapter>) {}
+    fn init(self: Pin<&Self>, _self_rc: &ItemRc) {
+        let animation_tracker_property_ptr = Self::FIELD_OFFSETS.animation_tracker.apply_pin(self);
+        self.widget_ptr.set(cpp! { unsafe [animation_tracker_property_ptr as "void*"] -> SlintTypeErasedWidgetPtr as "std::unique_ptr<SlintTypeErasedWidget>"  {
+            return make_unique_animated_widget<QWidget>(animation_tracker_property_ptr);
+        }})
+    }
 
     fn geometry(self: Pin<&Self>) -> LogicalRect {
         LogicalRect::new(
@@ -213,7 +229,9 @@ impl Item for NativeComboBoxPopup {
             initial_state as "int"
         ] {
             ensure_initialized();
+            QStyleOptionComboBox cb_option;
             QStyleOptionFrame option;
+            option.styleObject = widget;
             option.state |= QStyle::State(initial_state);
             option.lineWidth = 0;
             option.midLineWidth = 0;
@@ -221,9 +239,13 @@ impl Item for NativeComboBoxPopup {
             option.state |= QStyle::State_Sunken | QStyle::State_Enabled;
 
             auto style = qApp->style();
+            painter->get()->fillRect(option.rect, option.palette.window());
 
-            if (style->styleHint(QStyle::SH_ComboBox_Popup, &option, widget)) {
+            if (style->styleHint(QStyle::SH_ComboBox_Popup, &cb_option, widget)) {
                 style->drawPrimitive(QStyle::PE_PanelMenu, &option, painter->get(), widget);
+                auto vm = style->pixelMetric(QStyle::PM_MenuVMargin, &option, widget);
+                auto hm = style->pixelMetric(QStyle::PM_MenuHMargin, &option, widget);
+                painter->get()->fillRect(option.rect.adjusted(hm, vm, -hm, -vm), option.palette.window());
             } else {
                 option.lineWidth = 1;
             }

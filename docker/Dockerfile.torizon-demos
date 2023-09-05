@@ -1,5 +1,5 @@
-# Copyright © SixtyFPS GmbH <info@slint-ui.com>
-# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+# Copyright © SixtyFPS GmbH <info@slint.dev>
+# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 # This docker file builds the Rust binaries of our demos and packages them into a Torizon container
 
@@ -26,7 +26,7 @@ ENV CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc
 
 # Install Slint build dependencies (libxcb, etc.)
 RUN apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes libfontconfig1-dev:$TOOLCHAIN_ARCH libxcb1-dev:$TOOLCHAIN_ARCH libxcb-render0-dev:$TOOLCHAIN_ARCH libxcb-shape0-dev:$TOOLCHAIN_ARCH libxcb-xfixes0-dev:$TOOLCHAIN_ARCH libxkbcommon-dev:$TOOLCHAIN_ARCH python3 clang libstdc++-10-dev:$TOOLCHAIN_ARCH && \
+    DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes libfontconfig1-dev:$TOOLCHAIN_ARCH libxcb1-dev:$TOOLCHAIN_ARCH libxcb-render0-dev:$TOOLCHAIN_ARCH libxcb-shape0-dev:$TOOLCHAIN_ARCH libxcb-xfixes0-dev:$TOOLCHAIN_ARCH libxkbcommon-dev:$TOOLCHAIN_ARCH python3 clang libstdc++-11-dev:$TOOLCHAIN_ARCH && \
     rm -rf /var/lib/apt/lists/*
 
 # Don't require font-config when the compiler runs
@@ -37,7 +37,7 @@ COPY . /slint
 WORKDIR /slint
 RUN mkdir demos \
     && for demo in printerdemo slide_puzzle gallery opengl_underlay carousel todo energy-monitor; do \
-    cargo build --release --target $RUST_TOOLCHAIN_ARCH --features slint/renderer-winit-skia -p $demo; \
+    cargo build --release --target $RUST_TOOLCHAIN_ARCH --features slint/renderer-skia -p $demo; \
     cp target/$RUST_TOOLCHAIN_ARCH/release/$demo ./demos/; \
     done
 

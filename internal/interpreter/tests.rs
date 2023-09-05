@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 #[test]
 fn reuse_window() {
@@ -34,7 +34,7 @@ fn reuse_window() {
         let definition =
             spin_on::spin_on(compiler.build_from_source(code.into(), Default::default()));
         assert!(compiler.diagnostics().is_empty(), "{:?}", compiler.diagnostics());
-        let instance = definition.unwrap().create_with_existing_window(handle.window());
+        let instance = definition.unwrap().create_with_existing_window(handle.window()).unwrap();
         drop(handle);
         assert_eq!(
             instance.get_property("text_alias").unwrap(),

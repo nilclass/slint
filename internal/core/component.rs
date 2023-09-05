@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 #![warn(missing_docs)]
 
@@ -9,12 +9,11 @@ use crate::accessibility::AccessibleStringProperty;
 use crate::item_tree::{
     ItemTreeNode, ItemVisitorVTable, ItemWeak, TraversalOrder, VisitChildrenResult,
 };
-use crate::items::{AccessibleRole, ItemVTable};
+use crate::items::{AccessibleRole, ItemRc, ItemVTable};
 use crate::layout::{LayoutInfo, Orientation};
 use crate::slice::Slice;
-use crate::window::WindowAdapter;
+use crate::window::WindowAdapterRc;
 use crate::SharedString;
-use alloc::rc::Rc;
 use vtable::*;
 
 #[repr(C)]
@@ -82,6 +81,16 @@ pub struct ComponentVTable {
     /// strictly speaking not an Item at all!
     pub parent_node: extern "C" fn(core::pin::Pin<VRef<ComponentVTable>>, result: &mut ItemWeak),
 
+    /// This embeds this component into the item tree of another component
+    ///
+    /// Returns `true` if this component was embedded into the `parent_component`
+    /// at `parent_item_tree_index`.
+    pub embed_component: extern "C" fn(
+        core::pin::Pin<VRef<ComponentVTable>>,
+        parent_component: &VWeak<ComponentVTable>,
+        parent_item_tree_index: usize,
+    ) -> bool,
+
     /// Return the index of the current subtree or usize::MAX if this is not a subtree
     pub subtree_index: extern "C" fn(core::pin::Pin<VRef<ComponentVTable>>) -> usize,
 
@@ -99,6 +108,13 @@ pub struct ComponentVTable {
         item_index: usize,
         what: AccessibleStringProperty,
         result: &mut SharedString,
+    ),
+
+    /// Returns a Window, creating a fresh one if `do_create` is true.
+    pub window_adapter: extern "C" fn(
+        core::pin::Pin<VRef<ComponentVTable>>,
+        do_create: bool,
+        result: &mut Option<WindowAdapterRc>,
     ),
 
     /// in-place destructor (for VRc)
@@ -123,13 +139,18 @@ pub type ComponentRc = vtable::VRc<ComponentVTable, Dyn>;
 pub type ComponentWeak = vtable::VWeak<ComponentVTable, Dyn>;
 
 /// Call init() on the ItemVTable for each item of the component.
-pub fn register_component<Base>(
-    base: core::pin::Pin<&Base>,
-    item_array: &[vtable::VOffset<Base, ItemVTable, vtable::AllowPin>],
-    window_adapter: &Rc<dyn WindowAdapter>,
-) {
-    item_array.iter().for_each(|item| item.apply_pin(base).as_ref().init(window_adapter));
-    window_adapter.register_component();
+pub fn register_component(component_rc: &ComponentRc, window_adapter: Option<WindowAdapterRc>) {
+    let c = vtable::VRc::borrow_pin(component_rc);
+    let item_tree = c.as_ref().get_item_tree();
+    item_tree.iter().enumerate().for_each(|(tree_index, node)| {
+        if let ItemTreeNode::Item { .. } = &node {
+            let item = ItemRc::new(component_rc.clone(), tree_index);
+            c.as_ref().get_item_ref(tree_index).as_ref().init(&item);
+        }
+    });
+    if let Some(adapter) = window_adapter.as_ref().and_then(|a| a.internal(crate::InternalToken)) {
+        adapter.register_component();
+    }
 }
 
 /// Free the backend graphics resources allocated by the component's items.
@@ -137,37 +158,33 @@ pub fn unregister_component<Base>(
     base: core::pin::Pin<&Base>,
     component: ComponentRef,
     item_array: &[vtable::VOffset<Base, ItemVTable, vtable::AllowPin>],
-    window_adapter: &Rc<dyn WindowAdapter>,
+    window_adapter: &WindowAdapterRc,
 ) {
     window_adapter.renderer().free_graphics_resources(
         component,
         &mut item_array.iter().map(|item| item.apply_pin(base)),
     ).expect("Fatal error encountered when freeing graphics resources while destroying Slint component");
-    window_adapter
-        .unregister_component(component, &mut item_array.iter().map(|item| item.apply_pin(base)));
+    if let Some(w) = window_adapter.internal(crate::InternalToken) {
+        w.unregister_component(component, &mut item_array.iter().map(|item| item.apply_pin(base)));
+    }
 }
 
 #[cfg(feature = "ffi")]
 pub(crate) mod ffi {
     #![allow(unsafe_code)]
 
-    use crate::window::WindowAdapter;
+    use crate::window::WindowAdapterRc;
 
     use super::*;
 
     /// Call init() on the ItemVTable of each item in the item array.
     #[no_mangle]
     pub unsafe extern "C" fn slint_register_component(
-        component: ComponentRefPin,
-        item_array: Slice<vtable::VOffset<u8, ItemVTable, vtable::AllowPin>>,
+        component_rc: &ComponentRc,
         window_handle: *const crate::window::ffi::WindowAdapterRcOpaque,
     ) {
-        let window_adapter = &*(window_handle as *const Rc<dyn WindowAdapter>);
-        super::register_component(
-            core::pin::Pin::new_unchecked(&*(component.as_ptr() as *const u8)),
-            item_array.as_slice(),
-            window_adapter,
-        )
+        let window_adapter = (window_handle as *const WindowAdapterRc).as_ref().cloned();
+        super::register_component(component_rc, window_adapter)
     }
 
     /// Free the backend graphics resources allocated in the item array.
@@ -177,7 +194,7 @@ pub(crate) mod ffi {
         item_array: Slice<vtable::VOffset<u8, ItemVTable, vtable::AllowPin>>,
         window_handle: *const crate::window::ffi::WindowAdapterRcOpaque,
     ) {
-        let window_adapter = &*(window_handle as *const Rc<dyn WindowAdapter>);
+        let window_adapter = &*(window_handle as *const WindowAdapterRc);
         super::unregister_component(
             core::pin::Pin::new_unchecked(&*(component.as_ptr() as *const u8)),
             core::pin::Pin::into_inner(component),

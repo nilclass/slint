@@ -1,8 +1,8 @@
-# Copyright © SixtyFPS GmbH <info@slint-ui.com>
-# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+# Copyright © SixtyFPS GmbH <info@slint.dev>
+# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 cmake_minimum_required(VERSION 3.21)
-project(Slint HOMEPAGE_URL "https://slint-ui.com/" LANGUAGES CXX VERSION 1.0.0)
+project(Slint HOMEPAGE_URL "https://slint.dev/" LANGUAGES CXX VERSION 1.0.0)
 
 include(FeatureSummary)
 include(CMakeDependentOption)
@@ -11,21 +11,39 @@ include(FetchContent)
 FetchContent_Declare(
     Corrosion
     GIT_REPOSITORY https://github.com/corrosion-rs/corrosion.git
-    GIT_TAG v0.3.4
+    GIT_TAG v0.4.2
 )
 FetchContent_MakeAvailable(Corrosion)
 
 list(PREPEND CMAKE_MODULE_PATH ${Corrosion_SOURCE_DIR}/cmake)
 find_package(Rust 1.66 REQUIRED MODULE)
 
+option(BUILD_SHARED_LIBS "Build Slint as shared library" ON)
 option(SLINT_FEATURE_COMPILER "Enable support for compiling .slint files to C++ ahead of time" ON)
 
 if(SLINT_FEATURE_COMPILER)
     set(slint_compiler_crate "slint-compiler")
 endif()
 
+if(BUILD_SHARED_LIBS)
+    set(rustc_lib_type "cdylib")
+    set(slint_cpp_impl "slint-cpp-shared")
+    set(cmake_lib_type "SHARED")
+else()
+    set(rustc_lib_type "staticlib")
+    set(slint_cpp_impl "slint-cpp-static")
+    set(cmake_lib_type "STATIC")
+endif()
+
 corrosion_import_crate(MANIFEST_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../../Cargo.toml"
-    CRATES slint-cpp ${slint_compiler_crate})
+    CRATES slint-cpp ${slint_compiler_crate} CRATE_TYPES bin ${rustc_lib_type})
+
+set(SLINT_LIBRARY_CARGO_FLAGS "" CACHE STRING
+    "Flags to pass to cargo when building the Slint runtime library")
+if(SLINT_LIBRARY_CARGO_FLAGS)
+    corrosion_set_cargo_flags(slint-cpp ${SLINT_LIBRARY_CARGO_FLAGS})
+endif()
+
 
 # When doing "make install" package builds, set install_name to rpath, so that the installed
 # binaries don't have a load-command pointing back to their build directory.
@@ -33,7 +51,7 @@ corrosion_import_crate(MANIFEST_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../../Cargo.to
 # include the binary dir and thus our examples would have the correct rpath set, binaries
 # outside (i.e. applications using Slint via FetchContent) would not and the BUILD_RPATH
 # target property doesn't propagate :(
-if (APPLE AND SLINT_IS_TOPLEVEL_BUILD)
+if (APPLE AND SLINT_IS_TOPLEVEL_BUILD AND BUILD_SHARED_LIBS)
     # corrosion could provide the Cargo.toml package version as a CMake target property.
     corrosion_add_target_local_rustflags(slint-cpp -Clink-arg=-Wl,-install_name,@rpath/libslint_cpp.dylib,-current_version,${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR},-compatibility_version,${PROJECT_VERSION_MAJOR}.0)
     # Set this one to false again explicitely because Corrosion will starting setting this property to true by default.
@@ -49,10 +67,7 @@ set_property(
 )
 
 if(SLINT_FEATURE_COMPILER)
-    set_property(
-        TARGET slint-compiler
-        PROPERTY CORROSION_USE_HOST_BUILD 1
-    )
+    corrosion_set_hostbuild(slint-compiler)
 endif()
 
 add_library(Slint INTERFACE)
@@ -95,39 +110,51 @@ endfunction()
 
 # Features that are mapped to features in the Rust crate. These and their
 # defaults need to be kept in sync with the Rust bit.
-define_cargo_feature(interpreter "Enable support for the Slint interpeter to load .slint files at run-time" ON)
 
-define_cargo_feature(backend-winit "Enable support for the winit crate to interaction with all windowing systems." ON)
-define_cargo_feature(backend-winit-x11 "Enable support for the winit create to interact only with the X11 windowing system on Unix. Enable this option and turn off SLINT_FEATURE_BACKEND_WINIT for a smaller build with just X11 support on Unix." OFF)
-define_cargo_feature(backend-winit-wayland "Enable support for the winit create to interact only with the wayland windowing system on Unix. Enable this option and turn off SLINT_FEATURE_BACKEND_WINIT for a smaller build with just wayland support." OFF)
+define_cargo_feature(freestanding "Enable use of freestanding environment. This is only for bare-metal systems. Most other features are incompatible with this one" OFF)
 
-define_cargo_feature(renderer-winit-femtovg "Enable support for the OpenGL ES 2.0 based FemtoVG rendering engine." ON)
-define_cargo_feature(renderer-winit-skia "Enable support for the Skia based rendering engine." OFF)
-define_cargo_feature(renderer-winit-skia-opengl "Enable support for the Skia based rendering engine with its OpenGL backend." OFF)
-define_cargo_feature(renderer-winit-software "Enable support for the software renderer with the winit backend" OFF)
+# Compat options (must be declared after the STD feature, but before the other renderer features)
+function(define_renderer_winit_compat_option renderer)
+    string(TOUPPER "${renderer}" cmake_option)
+    string(REPLACE "-" "_" cmake_option "${cmake_option}")
+    cmake_dependent_option("SLINT_FEATURE_RENDERER_WINIT_${cmake_option}" "Compat option equivalent to SLINT_FEATURE_RENDERER_${cmake_option}" OFF "NOT SLINT_FEATURE_FREESTANDING" OFF)
+    if(SLINT_FEATURE_RENDERER_WINIT_${cmake_option})
+        set("SLINT_FEATURE_RENDERER_${cmake_option}" ON PARENT_SCOPE)
+        message("SLINT_FEATURE_RENDERER_WINIT_${cmake_option} is deprecated, use SLINT_FEATURE_RENDERER_${cmake_option} instead")
+    endif()
+endfunction()
+define_renderer_winit_compat_option(femtovg)
+define_renderer_winit_compat_option(skia)
+define_renderer_winit_compat_option(skia-opengl)
+define_renderer_winit_compat_option(skia-vulkan)
+define_renderer_winit_compat_option(software)
 
-define_cargo_feature(backend-qt "Enable Qt based rendering backend" ON)
+define_cargo_dependent_feature(interpreter "Enable support for the Slint interpeter to load .slint files at run-time" ON "NOT SLINT_FEATURE_FREESTANDING")
 
-define_cargo_feature(experimental "Enable experimental features (no compatibility guarantees)" OFF)
+define_cargo_dependent_feature(backend-winit "Enable support for the winit crate to interaction with all windowing systems." ON "NOT SLINT_FEATURE_FREESTANDING")
+define_cargo_dependent_feature(backend-winit-x11 "Enable support for the winit create to interact only with the X11 windowing system on Unix. Enable this option and turn off SLINT_FEATURE_BACKEND_WINIT for a smaller build with just X11 support on Unix." OFF "NOT SLINT_FEATURE_FREESTANDING")
+define_cargo_dependent_feature(backend-winit-wayland "Enable support for the winit create to interact only with the wayland windowing system on Unix. Enable this option and turn off SLINT_FEATURE_BACKEND_WINIT for a smaller build with just wayland support." OFF "NOT SLINT_FEATURE_FREESTANDING")
 
-# Compat options
-option(SLINT_FEATURE_BACKEND_GL_ALL "This feature is an alias for SLINT_FEATURE_BACKEND_WINIT and SLINT_FEATURE_RENDERER_FEMTOVG." OFF)
-option(SLINT_FEATURE_BACKEND_GL_X11 "This feature is an alias for SLINT_FEATURE_BACKEND_WINIT_X11 and SLINT_FEATURE_RENDERER_FEMTOVG." OFF)
-option(SLINT_FEATURE_BACKEND_GL_WAYLAND "This feature is an alias for SLINT_FEATURE_BACKEND_WINIT_WAYLAND and SLINT_FEATURE_RENDERER_FEMTOVG." OFF)
+define_cargo_dependent_feature(renderer-femtovg "Enable support for the OpenGL ES 2.0 based FemtoVG rendering engine." ON "NOT SLINT_FEATURE_FREESTANDING")
+define_cargo_dependent_feature(renderer-skia "Enable support for the Skia based rendering engine." OFF "NOT SLINT_FEATURE_FREESTANDING")
+define_cargo_dependent_feature(renderer-skia-opengl "Enable support for the Skia based rendering engine with its OpenGL backend." OFF "NOT SLINT_FEATURE_FREESTANDING")
+define_cargo_dependent_feature(renderer-skia-vulkan "Enable support for the Skia based rendering engine with its Vulkan backend." OFF "NOT SLINT_FEATURE_FREESTANDING")
+define_cargo_feature(renderer-software "Enable support for the software renderer" OFF)
 
-if(SLINT_FEATURE_BACKEND_GL_ALL)
-    set(SLINT_FEATURE_BACKEND_WINIT ON)
-    set(SLINT_FEATURE_RENDERER_FEMTOVG ON)
-endif()
+define_cargo_dependent_feature(backend-qt "Enable Qt based rendering backend" ON "NOT SLINT_FEATURE_FREESTANDING")
 
-if(SLINT_FEATURE_BACKEND_GL_X11)
-    set(SLINT_FEATURE_BACKEND_WINIT_X11 ON)
-    set(SLINT_FEATURE_RENDERER_FEMTOVG ON)
-endif()
+define_cargo_dependent_feature(backend-linuxkms "Enable support for the backend that renders a single window fullscreen on Linux (Experimental)" OFF "NOT SLINT_FEATURE_FREESTANDING")
 
-if(SLINT_FEATURE_BACKEND_GL_WAYLAND)
-    set(SLINT_FEATURE_BACKEND_WINIT_WAYLAND ON)
-    set(SLINT_FEATURE_RENDERER_FEMTOVG ON)
+define_cargo_dependent_feature(gettext "Enable support of translations using gettext" OFF "NOT SLINT_FEATURE_FREESTANDING")
+define_cargo_dependent_feature(accessibility "Enable integration with operating system provided accessibility APIs" ON "NOT SLINT_FEATURE_FREESTANDING")
+
+if (SLINT_FEATURE_FREESTANDING)
+
+    if (ESP_PLATFORM)
+        list(APPEND features "esp-backtrace/${IDF_TARGET}")
+    endif()
+else (SLINT_FEATURE_FREESTANDING)
+    list(APPEND features std)
 endif()
 
 set_property(
@@ -138,13 +165,13 @@ set_property(
 set_property(
     TARGET slint-cpp
     PROPERTY CORROSION_NO_DEFAULT_FEATURES
-    ${features}
+    ON
 )
 
 if(SLINT_FEATURE_BACKEND_QT)
     # For the CMake build don't rely on qmake being in PATH but use CMake to locate Qt. This
     # means usually CMAKE_PREFIX_PATH is set.
-    find_package(Qt6 6.0 QUIET COMPONENTS Core Widgets)
+    find_package(Qt6 6.2 QUIET COMPONENTS Core Widgets)
 
     if(NOT TARGET Qt::qmake)
         find_package(Qt5 5.15 QUIET COMPONENTS Core Widgets)
@@ -186,7 +213,7 @@ endif(SLINT_STYLE)
 #  * We look for clang or gcc in PATH - unprefixed those are usually host compilers.
 #  * Through corrosion we know the correct host value of CC_<triplet>.
 # Finally, we set CC_<host triplet> to clang or gcc and empty CFLAGS_<host triplet>
-if((SLINT_FEATURE_RENDERER_WINIT_SKIA OR SLINT_FEATURE_RENDERER_WINIT_SKIA_OPENGL) AND CMAKE_CROSSCOMPILING AND Rust_CARGO_HOST_TARGET)
+if((SLINT_FEATURE_RENDERER_SKIA OR SLINT_FEATURE_RENDERER_SKIA_OPENGL OR SLINT_FEATURE_RENDERER_SKIA_VULKAN) AND CMAKE_CROSSCOMPILING AND Rust_CARGO_HOST_TARGET)
     find_program(CLANG clang)
     if(CLANG)
         set(host_cc "${CLANG}")
@@ -213,10 +240,6 @@ if((SLINT_FEATURE_RENDERER_WINIT_SKIA OR SLINT_FEATURE_RENDERER_WINIT_SKIA_OPENG
     endif()
 endif()
 
-if(SLINT_FEATURE_EXPERIMENTAL)
-    target_compile_definitions(Slint INTERFACE SLINT_FEATURE_EXPERIMENTAL)
-endif()
-
 file(GLOB api_headers RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/include/"
     "${CMAKE_CURRENT_SOURCE_DIR}/include/*.h")
 
@@ -227,6 +250,9 @@ endforeach()
 set(generated_headers
     ${CMAKE_CURRENT_BINARY_DIR}/generated_include/slint_internal.h
     ${CMAKE_CURRENT_BINARY_DIR}/generated_include/slint_enums_internal.h
+    ${CMAKE_CURRENT_BINARY_DIR}/generated_include/slint_enums.h
+    ${CMAKE_CURRENT_BINARY_DIR}/generated_include/slint_builtin_structs_internal.h
+    ${CMAKE_CURRENT_BINARY_DIR}/generated_include/slint_builtin_structs.h
     ${CMAKE_CURRENT_BINARY_DIR}/generated_include/slint_string_internal.h
     ${CMAKE_CURRENT_BINARY_DIR}/generated_include/slint_brush_internal.h
     ${CMAKE_CURRENT_BINARY_DIR}/generated_include/slint_sharedvector_internal.h
@@ -235,11 +261,17 @@ set(generated_headers
     ${CMAKE_CURRENT_BINARY_DIR}/generated_include/slint_color_internal.h
     ${CMAKE_CURRENT_BINARY_DIR}/generated_include/slint_pathdata_internal.h
     ${CMAKE_CURRENT_BINARY_DIR}/generated_include/slint_qt_internal.h
-    ${CMAKE_CURRENT_BINARY_DIR}/generated_include/slint_backend_internal.h
+    ${CMAKE_CURRENT_BINARY_DIR}/generated_include/slint_platform_internal.h
     ${CMAKE_CURRENT_BINARY_DIR}/generated_include/slint_generated_public.h
-    ${CMAKE_CURRENT_BINARY_DIR}/generated_include/slint_interpreter_internal.h
-    ${CMAKE_CURRENT_BINARY_DIR}/generated_include/slint_interpreter_generated_public.h
 )
+
+if(SLINT_FEATURE_INTERPRETER)
+    list(APPEND generated_headers
+        ${CMAKE_CURRENT_BINARY_DIR}/generated_include/slint_interpreter_internal.h
+        ${CMAKE_CURRENT_BINARY_DIR}/generated_include/slint_interpreter_generated_public.h
+    )
+endif()
+
 
 foreach(header IN LISTS generated_headers)
     set_property(TARGET Slint APPEND PROPERTY PUBLIC_HEADER ${header})
@@ -265,17 +297,15 @@ install(TARGETS Slint slint-cpp
 include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)
 
-install(FILES $<TARGET_FILE:slint-cpp-shared> TYPE LIB)
+install(FILES $<TARGET_FILE:${slint_cpp_impl}> TYPE LIB)
 
 if(WIN32)
-    install(FILES $<TARGET_LINKER_FILE:slint-cpp-shared> TYPE LIB)
+    install(FILES $<TARGET_LINKER_FILE:${slint_cpp_impl}> TYPE LIB)
 endif()
 
 if(SLINT_FEATURE_COMPILER)
     install(PROGRAMS $<TARGET_FILE:slint-compiler> TYPE BIN)
 endif()
-
-set(SLINT_LIB_PROPERTIES "IMPORTED_NO_SONAME;1")
 
 # Corrosion sets the `IMPORTED` locations late to allow us to set OUTPUT_DIRECTORY
 # target properties. This function must be deferred until after Corrosion set the
@@ -287,7 +317,7 @@ function(_slint_write_configure_file)
         IMPORTED_LOCATION_RELWITHDEBINFO IMPORTED_LOCATION_MINSIZEREL
         IMPORTED_IMPLIB IMPORTED_IMPLIB_DEBUG IMPORTED_IMPLIB_RELEASE
         IMPORTED_IMPLIB_RELWITHDEBINFO IMPORTED_IMPLIB_MINSIZEREL)
-        get_target_property(value slint-cpp-shared ${prop})
+        get_target_property(value ${slint_cpp_impl} ${prop})
 
         if(value)
             get_filename_component(value ${value} NAME)
@@ -303,7 +333,7 @@ cmake_language(DEFER CALL _slint_write_configure_file)
 
 write_basic_package_version_file(
     ${CMAKE_CURRENT_BINARY_DIR}/lib/cmake/Slint/SlintConfigVersion.cmake
-    VERSION 1.0.3
+    VERSION 1.2.0
     COMPATIBILITY SameMinorVersion
 )
 
@@ -355,9 +385,9 @@ set(CPACK_PACKAGE_NAME "Slint-cpp")
 set(CPACK_PACKAGE_VENDOR "Slint")
 set(CPACK_VERBATIM_VARIABLES true)
 set(CPACK_PACKAGE_VERSION_MAJOR 1)
-set(CPACK_PACKAGE_VERSION_MINOR 0)
-set(CPACK_PACKAGE_VERSION_PATCH 3)
-set(CPACK_PACKAGE_HOMEPAGE_URL "https://slint-ui.com")
+set(CPACK_PACKAGE_VERSION_MINOR 2)
+set(CPACK_PACKAGE_VERSION_PATCH 0)
+set(CPACK_PACKAGE_HOMEPAGE_URL "https://slint.dev")
 set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_LIST_DIR}/../../LICENSE.md")
 set(CPACK_RESOURCE_FILE_README "${CMAKE_CURRENT_LIST_DIR}/README.md")
 set(CPACK_STRIP_FILES ON)

@@ -1,5 +1,5 @@
-// Copyright © SixtyFPS GmbH <info@slint-ui.com>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 use crate::diagnostics::BuildDiagnostics;
 use crate::expression_tree::Expression;
@@ -54,7 +54,7 @@ fn ensure_pure(
         }
         Expression::FunctionReference(nr, node) => {
             match nr.element().borrow().lookup_property(nr.name()).declared_pure {
-                Some(true) => return,
+                Some(true) => (),
                 Some(false) => {
                     if let Some(diag) = diag.as_deref_mut() {
                         diag.push_diagnostic(
