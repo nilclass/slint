@@ -9,6 +9,10 @@ use crate::timers::*;
 use std::cell::RefCell;
 use std::convert::TryFrom;
 use std::rc::Rc;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::{Duration, Instant};
+#[cfg(target_arch = "wasm32")]
+use web_time::{Duration, Instant};
 
 enum RefreshMode {
     Lazy,      // render only when necessary (default)
@@ -48,7 +52,7 @@ impl core::fmt::Display for RenderingMetrics {
 }
 
 struct FrameData {
-    timestamp: instant::Instant,
+    timestamp: Instant,
     metrics: RenderingMetrics,
 }
 
@@ -111,37 +115,33 @@ impl RenderingMetricsCollector {
 
         let self_weak = Rc::downgrade(&collector);
         collector.update_timer.stop();
-        collector.update_timer.start(
-            TimerMode::Repeated,
-            std::time::Duration::from_secs(1),
-            move || {
-                let this = match self_weak.upgrade() {
-                    Some(this) => this,
-                    None => return,
-                };
-                this.trim_frame_data_to_second_boundary();
+        collector.update_timer.start(TimerMode::Repeated, Duration::from_secs(1), move || {
+            let this = match self_weak.upgrade() {
+                Some(this) => this,
+                None => return,
+            };
+            this.trim_frame_data_to_second_boundary();
 
-                let mut last_frame_details = String::new();
-                if let Some(last_frame_data) =
-                    this.collected_frame_data_since_second_ago.borrow().last()
+            let mut last_frame_details = String::new();
+            if let Some(last_frame_data) =
+                this.collected_frame_data_since_second_ago.borrow().last()
+            {
+                use core::fmt::Write;
+                if write!(&mut last_frame_details, "{}", last_frame_data.metrics).is_ok()
+                    && !last_frame_details.is_empty()
                 {
-                    use core::fmt::Write;
-                    if write!(&mut last_frame_details, "{}", last_frame_data.metrics).is_ok()
-                        && !last_frame_details.is_empty()
-                    {
-                        last_frame_details.insert_str(0, "details from last frame: ");
-                    }
+                    last_frame_details.insert_str(0, "details from last frame: ");
                 }
+            }
 
-                if this.output_console {
-                    eprintln!(
-                        "average frames per second: {} {}",
-                        this.collected_frame_data_since_second_ago.borrow().len(),
-                        last_frame_details
-                    );
-                }
-            },
-        );
+            if this.output_console {
+                eprintln!(
+                    "average frames per second: {} {}",
+                    this.collected_frame_data_since_second_ago.borrow().len(),
+                    last_frame_details
+                );
+            }
+        });
 
         Some(collector)
     }
@@ -150,7 +150,7 @@ impl RenderingMetricsCollector {
         let mut i = 0;
         let mut frame_times = self.collected_frame_data_since_second_ago.borrow_mut();
         while i < frame_times.len() {
-            if frame_times[i].timestamp.elapsed() > std::time::Duration::from_secs(1) {
+            if frame_times[i].timestamp.elapsed() > Duration::from_secs(1) {
                 frame_times.remove(i);
             } else {
                 i += 1
@@ -166,7 +166,7 @@ impl RenderingMetricsCollector {
     ) {
         self.collected_frame_data_since_second_ago
             .borrow_mut()
-            .push(FrameData { timestamp: instant::Instant::now(), metrics: renderer.metrics() });
+            .push(FrameData { timestamp: Instant::now(), metrics: renderer.metrics() });
         if matches!(self.refresh_mode, RefreshMode::FullSpeed) {
             crate::animations::CURRENT_ANIMATION_DRIVER
                 .with(|driver| driver.set_has_active_animations());
