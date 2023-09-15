@@ -472,6 +472,10 @@ impl RendererSealed for FemtoVGRenderer {
         &self,
         data: &'static [u8],
     ) -> Result<(), Box<dyn std::error::Error>> {
+        // FIXME: this panics
+        #[cfg(target_os = "android")]
+        return Ok(());
+
         sharedfontdb::register_font_from_memory(data)
     }
 

@@ -49,7 +49,7 @@ impl NotRunningEventLoop {
     fn new() -> Self {
         let mut builder = winit::event_loop::EventLoopBuilder::with_user_event();
 
-        #[cfg(all(unix, not(target_os = "macos")))]
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
         {
             #[cfg(feature = "wayland")]
             {

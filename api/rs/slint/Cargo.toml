@@ -35,7 +35,10 @@ default = [
 ## that would be enabled by default only if this feature was added.
 ## [More info in this blog post](https://slint.dev/blog/rust-adding-default-cargo-feature.html)
 "compat-1-2" = []
-"compat-1-0" = ["compat-1-2", "renderer-software"]
+"compat-1-0" = [
+  "compat-1-2",
+  #"renderer-software"
+]
 
 ## Enable use of the Rust standard library.
 std = ["i-slint-core/std"]

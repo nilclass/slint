@@ -341,5 +341,19 @@ fn test_window_accessor() {
 pub fn android_init(
     android_app: winit::platform::android::activity::AndroidApp,
 ) -> Result<(), String> {
-    event_loop::ANDROID_APP.set(android_app).map_err(|_| "android_init called twice".into())
+    event_loop::ANDROID_APP.set(android_app).map_err(|_| "android_init called twice")?;
+    // FIXME... We must wait for InitWindow before other stuff are allowed. Find another way to create the window later
+    let android_app = event_loop::ANDROID_APP.get().unwrap();
+    let mut exit = false;
+    while !exit {
+        android_app.poll_events(None, |event| {
+            if let winit::platform::android::activity::PollEvent::Main(
+                winit::platform::android::activity::MainEvent::InitWindow { .. },
+            ) = event
+            {
+                exit = true;
+            }
+        });
+    }
+    Ok(())
 }
