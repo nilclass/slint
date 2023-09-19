@@ -3,6 +3,9 @@
 
 use slint_interpreter::{ComponentCompiler, ComponentHandle};
 
+mod component;
+pub use component::*;
+
 mod interpreter;
 pub use interpreter::*;
 
