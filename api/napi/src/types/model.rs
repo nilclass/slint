@@ -19,7 +19,6 @@ pub struct JsModel {
 
 impl JsModel {
     pub fn new<T: NapiRaw>(env: Env, model: T, data_type: Type) -> napi::Result<Rc<Self>> {
-        // let model = RefCountedReference::new(&env, model)?;
         let js_model = Rc::new(Self {
             notify: Default::default(),
             env,
@@ -48,9 +47,7 @@ impl Model for JsModel {
             .get::<&str, JsFunction>("rowCount")
             .ok()
             .and_then(|callback| {
-                callback.and_then(|callback| {
-                    callback.call::<JsUnknown>(Some(&model), vec![].as_ref()).ok()
-                })
+                callback.and_then(|callback| callback.call::<JsUnknown>(Some(&model), &[]).ok())
             })
             .and_then(|res| res.coerce_to_number().ok())
             .map(|num| num.get_uint32().ok().map_or(0, |count| count as usize))
