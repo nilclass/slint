@@ -74,7 +74,7 @@ export component SpinBox {
                     font-size: Typography.body.font-size;
                     font-weight: Typography.body.font-weight;
                     selection-background-color: Palette.accent-selected-text;
-                    selection-foreground-color: self.color;
+                    selection-foreground-color: enabled ? Palette.text-on-accent-primary : Palette.text-on-accent-disabled;
                     horizontal-stretch: 1;
                     text: root.value;
 
