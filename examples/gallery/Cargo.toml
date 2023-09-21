@@ -15,7 +15,12 @@ path = "main.rs"
 name = "gallery"
 
 [dependencies]
-slint = { path = "../../api/rs/slint", features=["gettext"] }
+slint = { path = "../../api/rs/slint", default-features = false, features = [
+    "std",
+    "backend-winit",
+    "renderer-winit-skia",
+    "compat-1-0",
+] }
 
 [build-dependencies]
 slint-build = { path = "../../api/rs/build" }
@@ -32,3 +37,9 @@ slint-build = { path = "../../api/rs/build" }
 #wasm# wasm-bindgen = { version = "0.2" }
 #wasm# web-sys = { version = "0.3", features=["console"] }
 #wasm# console_error_panic_hook = "0.1.5"
+
+[lib]
+path = "main.rs"
+crate-type = ["cdylib"]
+[target.'cfg(target_os = "android")'.dependencies]
+android-activity = "0.4"

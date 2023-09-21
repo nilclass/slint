@@ -1,7 +1,7 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
 // SPDX-License-Identifier: MIT
 
-#![deny(unsafe_code)]
+//#![deny(unsafe_code)]
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
@@ -19,7 +19,7 @@ pub fn main() {
     #[cfg(all(debug_assertions, target_arch = "wasm32"))]
     console_error_panic_hook::set_once();
 
-    slint::init_translations!(concat!(env!("CARGO_MANIFEST_DIR"), "/lang/"));
+    // slint::init_translations!(concat!(env!("CARGO_MANIFEST_DIR"), "/lang/"));
 
     let app = App::new().unwrap();
 
@@ -71,4 +71,10 @@ pub fn main() {
     });
 
     app.run().unwrap();
+}
+
+#[cfg(target_os = "android")]
+#[no_mangle]
+fn slint_android_main(app: android_activity::AndroidApp) {
+    main();
 }

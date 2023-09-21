@@ -107,7 +107,6 @@ pub fn main() {
 
 #[cfg(target_os = "android")]
 #[no_mangle]
-fn android_main(app: android_activity::AndroidApp) {
-    slint::android_init(app).unwrap();
+fn slint_android_main() {
     main();
 }

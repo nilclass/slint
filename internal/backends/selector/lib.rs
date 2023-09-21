@@ -97,6 +97,3 @@ pub fn with_platform<R>(
 ) -> Result<R, PlatformError> {
     i_slint_core::with_platform(create_backend, f)
 }
-
-#[cfg(all(feature = "i-slint-backend-winit", target_os = "android"))]
-pub use i_slint_backend_winit::android_init;

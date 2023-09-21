@@ -15,9 +15,17 @@ path = "main.rs"
 name = "printerdemo"
 
 [dependencies]
-slint = { path = "../../../api/rs/slint", default-features=false, features=["std", "backend-winit", "renderer-winit-skia", "compat-1-0"] }
+slint = { path = "../../../api/rs/slint", default-features = false, features = [
+    "std",
+    "backend-winit",
+    "renderer-winit-skia",
+    "compat-1-0",
+] }
 
-chrono = { version = "0.4", default-features = false, features = ["clock", "std"]}
+chrono = { version = "0.4", default-features = false, features = [
+    "clock",
+    "std",
+] }
 
 [build-dependencies]
 slint-build = { path = "../../../api/rs/build" }
@@ -36,8 +44,8 @@ slint-build = { path = "../../../api/rs/build" }
 #wasm# console_error_panic_hook = "0.1.5"
 
 
- [lib]
- path = "main.rs"
- crate-type = ["cdylib"]
+[lib]
+path = "main.rs"
+crate-type = ["cdylib"]
 [target.'cfg(target_os = "android")'.dependencies]
 android-activity = "0.4"
